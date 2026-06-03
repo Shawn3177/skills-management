@@ -1,0 +1,115 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+      - "feat/**"
+      - "fix/**"
+      - "chore/**"
+  pull_request:
+
+jobs:
+  repository-hygiene:
+    name: Repository hygiene
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Verify required docs
+        shell: bash
+        run: |
+          test -f README.md
+          test -f AGENTS.md
+          test -f docs/skills-manage-v1-plan.md
+          test -f docs/superpowers/specs/2026-06-03-skills-manage-v1-technical-design.md
+          test -f docs/development-workflow.md
+
+      - name: Verify local HTML references are not tracked
+        shell: bash
+        run: |
+          if git ls-files --error-unmatch agent_project_process_reference.html >/dev/null 2>&1; then
+            echo "agent_project_process_reference.html must stay local and ignored."
+            exit 1
+          fi
+          if git ls-files --error-unmatch preview.html >/dev/null 2>&1; then
+            echo "preview.html must stay local and ignored."
+            exit 1
+          fi
+
+      - name: Check for unfinished marker text
+        shell: bash
+        run: |
+          pattern='TODO[:]|TBD[:]'
+          if grep -RInE --exclude=ci.yml --exclude-dir=plans "$pattern" AGENTS.md .github docs; then
+            echo "Unfinished marker text found."
+            exit 1
+          fi
+
+  frontend:
+    name: Frontend checks
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Detect frontend project
+        id: detect
+        shell: bash
+        run: |
+          if [ -f apps/desktop/package.json ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Setup Node
+        if: steps.detect.outputs.present == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Install dependencies
+        if: steps.detect.outputs.present == 'true'
+        working-directory: apps/desktop
+        run: npm ci
+
+      - name: Build frontend
+        if: steps.detect.outputs.present == 'true'
+        working-directory: apps/desktop
+        run: npm run build --if-present
+
+  rust:
+    name: Rust checks
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Detect Rust project
+        id: detect
+        shell: bash
+        run: |
+          if [ -f apps/desktop/src-tauri/Cargo.toml ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Setup Rust
+        if: steps.detect.outputs.present == 'true'
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cargo check
+        if: steps.detect.outputs.present == 'true'
+        working-directory: apps/desktop/src-tauri
+        run: cargo check
+
+      - name: Cargo test
+        if: steps.detect.outputs.present == 'true'
+        working-directory: apps/desktop/src-tauri
+        run: cargo test
