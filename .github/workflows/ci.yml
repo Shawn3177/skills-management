@@ -7,6 +7,7 @@ on:
       - "feat/**"
       - "fix/**"
       - "chore/**"
+      - "codex/**"
   pull_request:
 
 jobs:
@@ -82,6 +83,11 @@ jobs:
         working-directory: apps/desktop
         run: npm run build --if-present
 
+      - name: Test frontend
+        if: steps.detect.outputs.present == 'true'
+        working-directory: apps/desktop
+        run: npm test -- --run
+
   rust:
     name: Rust checks
     runs-on: ubuntu-latest
@@ -103,6 +109,13 @@ jobs:
       - name: Setup Rust
         if: steps.detect.outputs.present == 'true'
         uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Tauri Linux dependencies
+        if: steps.detect.outputs.present == 'true'
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf
 
       - name: Cargo check
         if: steps.detect.outputs.present == 'true'
