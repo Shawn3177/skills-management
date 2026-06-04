@@ -263,12 +263,34 @@ h3 {
   border-radius: 8px;
   background: var(--surface-strong);
   color: var(--muted);
+  cursor: pointer;
+}
+
+.icon-action:disabled {
+  opacity: 0.72;
 }
 
 .skills-list {
   display: grid;
   gap: 8px;
   margin-top: 14px;
+}
+
+.scan-status {
+  min-height: 34px;
+  margin-top: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #eef7f8;
+  color: var(--accent-strong);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.scan-status.error {
+  background: #fff4f4;
+  color: var(--danger);
 }
 
 .skill-row {

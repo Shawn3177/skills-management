@@ -1,5 +1,8 @@
 use serde::Serialize;
 
+mod scanner;
+use scanner::{scan_default_skills, ScannedSkill};
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct AppStatus {
     app_name: String,
@@ -24,11 +27,16 @@ fn get_app_status() -> AppStatus {
     default_app_status()
 }
 
+#[tauri::command]
+fn scan_skills() -> Vec<ScannedSkill> {
+    scan_default_skills()
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
-        .invoke_handler(tauri::generate_handler![get_app_status])
+        .invoke_handler(tauri::generate_handler![get_app_status, scan_skills])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
