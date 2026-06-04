@@ -1,6 +1,8 @@
 use serde::Serialize;
 
+mod library;
 mod scanner;
+use library::{import_skill_to_library as import_skill_to_library_impl, ImportResult};
 use scanner::{scan_default_skills, ScannedSkill};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -32,11 +34,20 @@ fn scan_skills() -> Vec<ScannedSkill> {
     scan_default_skills()
 }
 
+#[tauri::command]
+fn import_skill_to_library(source_path: String) -> Result<ImportResult, String> {
+    import_skill_to_library_impl(source_path)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
-        .invoke_handler(tauri::generate_handler![get_app_status, scan_skills])
+        .invoke_handler(tauri::generate_handler![
+            get_app_status,
+            scan_skills,
+            import_skill_to_library
+        ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

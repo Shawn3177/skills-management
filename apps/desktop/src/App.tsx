@@ -40,6 +40,15 @@ const sections = [
 ];
 
 type ScanState = "scanning" | "ready" | "error";
+type ImportState = "idle" | "importing" | "success" | "error";
+
+type ImportResult = {
+  imported: boolean;
+  alreadyManaged: boolean;
+  skillName: string;
+  libraryPath: string;
+  message: string;
+};
 
 function App() {
   const [query, setQuery] = useState("");
@@ -47,11 +56,18 @@ function App() {
   const [selectedId, setSelectedId] = useState("");
   const [scanState, setScanState] = useState<ScanState>("scanning");
   const [scanError, setScanError] = useState("");
+  const [importState, setImportState] = useState<ImportState>("idle");
+  const [importMessage, setImportMessage] = useState("");
   const visibleSkills = skills.length > 0 ? skills : demoSkills;
   const usingFallback = scanState === "ready" && skills.length === 0;
   const filteredSkills = useMemo(() => filterSkills(visibleSkills, query), [query, visibleSkills]);
   const selectedSkill = filteredSkills.find((skill) => skill.id === selectedId) ?? filteredSkills[0];
   const stats = useMemo(() => getSkillStats(visibleSkills), [visibleSkills]);
+  const importDisabled =
+    !selectedSkill ||
+    selectedSkill.source === "Shared Library" ||
+    scanState === "scanning" ||
+    importState === "importing";
 
   async function loadSkills() {
     setScanState("scanning");
@@ -67,6 +83,37 @@ function App() {
       setSelectedId(demoSkills[0]?.id ?? "");
       setScanError(error instanceof Error ? error.message : "Unable to scan local folders.");
       setScanState("error");
+    }
+  }
+
+  async function importSelectedSkill() {
+    if (!selectedSkill || selectedSkill.source === "Shared Library") {
+      return;
+    }
+
+    setImportState("importing");
+    setImportMessage(`Importing ${selectedSkill.name} into the shared library.`);
+
+    try {
+      const result = await invoke<ImportResult>("import_skill_to_library", {
+        sourcePath: selectedSkill.sourcePath,
+      });
+      setImportState("success");
+      setImportMessage(
+        result.imported
+          ? `Imported ${result.skillName} into the shared library.`
+          : result.message || `${result.skillName} is already in the shared library.`,
+      );
+      await loadSkills();
+    } catch (error) {
+      setImportState("error");
+      setImportMessage(
+        error instanceof Error
+          ? error.message
+          : typeof error === "string"
+            ? error
+            : "Import failed. Check the skill folder and try again.",
+      );
     }
   }
 
@@ -175,7 +222,15 @@ function App() {
       </section>
 
       <section className="detail-pane" aria-label="Skill detail">
-        {selectedSkill ? <SkillDetail skill={selectedSkill} /> : null}
+        {selectedSkill ? (
+          <SkillDetail
+            skill={selectedSkill}
+            importDisabled={importDisabled}
+            importMessage={importMessage}
+            importState={importState}
+            onImport={() => void importSelectedSkill()}
+          />
+        ) : null}
       </section>
 
       <footer className="status-strip" aria-label="App status">
@@ -225,8 +280,22 @@ function SkillListItem({
   );
 }
 
-function SkillDetail({ skill }: { skill: SkillRecord }) {
+function SkillDetail({
+  skill,
+  importDisabled,
+  importMessage,
+  importState,
+  onImport,
+}: {
+  skill: SkillRecord;
+  importDisabled: boolean;
+  importMessage: string;
+  importState: ImportState;
+  onImport: () => void;
+}) {
   const Icon = healthIcons[skill.health];
+  const importLabel =
+    skill.source === "Shared Library" ? "Already in library" : importState === "importing" ? "Importing" : "Import to library";
 
   return (
     <div className="detail-content">
@@ -285,9 +354,15 @@ function SkillDetail({ skill }: { skill: SkillRecord }) {
       </section>
 
       <section className="action-bar" aria-label="Skill actions">
-        <button type="button" disabled>
+        <button
+          className="primary-action"
+          type="button"
+          disabled={importDisabled}
+          onClick={onImport}
+          aria-describedby={importMessage ? "import-status" : undefined}
+        >
           <FolderInput size={17} strokeWidth={1.8} />
-          Import folder
+          {importLabel}
         </button>
         <button type="button" disabled>
           <Archive size={17} strokeWidth={1.8} />
@@ -298,6 +373,16 @@ function SkillDetail({ skill }: { skill: SkillRecord }) {
           Export .skillpack
         </button>
       </section>
+
+      {importMessage ? (
+        <div
+          className={`import-status ${importState === "error" ? "error" : "success"}`}
+          id="import-status"
+          role={importState === "error" ? "alert" : "status"}
+        >
+          {importMessage}
+        </div>
+      ) : null}
     </div>
   );
 }

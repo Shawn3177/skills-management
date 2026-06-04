@@ -486,6 +486,48 @@ h3 {
   padding: 0 14px;
 }
 
+.action-bar button:not(:disabled) {
+  cursor: pointer;
+}
+
+.action-bar button.primary-action {
+  border-color: rgba(15, 138, 157, 0.5);
+  background: var(--accent);
+  color: #ffffff;
+}
+
+.action-bar button.primary-action:hover:not(:disabled) {
+  background: var(--accent-strong);
+}
+
+.action-bar button.primary-action:active:not(:disabled) {
+  transform: translateY(1px);
+}
+
+.action-bar button.primary-action:disabled {
+  border-color: var(--line);
+  background: var(--surface-muted);
+  color: var(--muted);
+  opacity: 0.72;
+}
+
+.import-status {
+  min-height: 38px;
+  padding: 10px 12px;
+  border: 1px solid rgba(15, 138, 157, 0.24);
+  border-radius: 8px;
+  background: #eef7f8;
+  color: var(--accent-strong);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.import-status.error {
+  border-color: rgba(180, 35, 53, 0.24);
+  background: #fff4f4;
+  color: var(--danger);
+}
+
 .status-strip {
   grid-column: 1 / -1;
   display: flex;
