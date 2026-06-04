@@ -1,3 +1,4 @@
+use crate::targets::is_managed_target_copy;
 use serde::Serialize;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -56,6 +57,14 @@ pub fn candidate_skill_roots() -> Vec<PathBuf> {
 }
 
 pub fn scan_skill_roots(roots: &[PathBuf]) -> Vec<ScannedSkill> {
+    let target_roots = default_target_roots();
+    scan_skill_roots_with_target_roots(roots, &target_roots)
+}
+
+pub fn scan_skill_roots_with_target_roots(
+    roots: &[PathBuf],
+    target_roots: &[(&str, PathBuf)],
+) -> Vec<ScannedSkill> {
     let mut skills = Vec::new();
 
     for root in roots {
@@ -74,7 +83,7 @@ pub fn scan_skill_roots(roots: &[PathBuf]) -> Vec<ScannedSkill> {
                 continue;
             }
 
-            if let Some(skill) = scan_skill_dir(root, &path, &skill_file) {
+            if let Some(skill) = scan_skill_dir(root, &path, &skill_file, target_roots) {
                 skills.push(skill);
             }
         }
@@ -84,7 +93,12 @@ pub fn scan_skill_roots(roots: &[PathBuf]) -> Vec<ScannedSkill> {
     skills
 }
 
-fn scan_skill_dir(root: &Path, skill_dir: &Path, skill_file: &Path) -> Option<ScannedSkill> {
+fn scan_skill_dir(
+    root: &Path,
+    skill_dir: &Path,
+    skill_file: &Path,
+    target_roots: &[(&str, PathBuf)],
+) -> Option<ScannedSkill> {
     let directory_name = skill_dir
         .file_name()
         .and_then(|value| value.to_str())
@@ -98,7 +112,7 @@ fn scan_skill_dir(root: &Path, skill_dir: &Path, skill_file: &Path) -> Option<Sc
             source: source_label(root),
             source_path: skill_dir.display().to_string(),
             health: SkillHealth::Broken,
-            targets: default_targets(root),
+            targets: target_states(root, skill_dir, target_roots),
             support_files: support_files(skill_dir),
         });
     };
@@ -119,7 +133,7 @@ fn scan_skill_dir(root: &Path, skill_dir: &Path, skill_file: &Path) -> Option<Sc
         source: source_label(root),
         source_path: skill_dir.display().to_string(),
         health,
-        targets: default_targets(root),
+        targets: target_states(root, skill_dir, target_roots),
         support_files: support_files(skill_dir),
     })
 }
@@ -196,17 +210,72 @@ fn source_label(root: &Path) -> String {
     }
 }
 
-fn default_targets(root: &Path) -> Vec<TargetState> {
+fn target_states(
+    root: &Path,
+    skill_dir: &Path,
+    target_roots: &[(&str, PathBuf)],
+) -> Vec<TargetState> {
     let source = source_label(root);
+    let skill_folder = skill_dir
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or("unknown-skill");
 
-    ["Codex", "Claude Code", "VS Code"]
+    [
+        ("codex", "Codex"),
+        ("claude-code", "Claude Code"),
+        ("vs-code", "VS Code"),
+    ]
+    .iter()
+    .map(|(target_id, target_name)| TargetState {
+        id: target_id.to_string(),
+        name: target_name.to_string(),
+        enabled: target_enabled(
+            &source,
+            skill_dir,
+            skill_folder,
+            target_id,
+            target_name,
+            target_roots,
+        ),
+    })
+    .collect()
+}
+
+fn target_enabled(
+    source: &str,
+    skill_dir: &Path,
+    skill_folder: &str,
+    target_id: &str,
+    target_name: &str,
+    target_roots: &[(&str, PathBuf)],
+) -> bool {
+    if source == target_name {
+        return true;
+    }
+
+    if source != "Shared Library" {
+        return false;
+    }
+
+    target_roots
         .iter()
-        .map(|target| TargetState {
-            id: target.to_lowercase().replace(' ', "-"),
-            name: target.to_string(),
-            enabled: source == *target,
+        .find(|(candidate_id, _)| *candidate_id == target_id)
+        .map(|(_, target_root)| {
+            is_managed_target_copy(&target_root.join(skill_folder), skill_dir, target_id)
         })
-        .collect()
+        .unwrap_or(false)
+}
+
+fn default_target_roots() -> Vec<(&'static str, PathBuf)> {
+    let Some(home) = home_dir() else {
+        return Vec::new();
+    };
+
+    vec![
+        ("codex", home.join(".codex").join("skills")),
+        ("claude-code", home.join(".claude").join("skills")),
+    ]
 }
 
 fn slug_id(value: &str) -> String {
@@ -287,6 +356,56 @@ mod tests {
         let skills = scan_skill_roots(&[root]);
 
         assert!(skills.is_empty());
+    }
+
+    #[test]
+    fn shared_library_skill_reports_managed_target_enabled() {
+        let temp_root = unique_temp_dir("scan-target-state-data");
+        let data_root = temp_root.join(".skills-manage");
+        let library_root = data_root.join("library");
+        let codex_root = unique_temp_dir("scan-target-state-codex");
+        let skill_dir = library_root.join("managed-skill");
+        fs::create_dir_all(&skill_dir).unwrap();
+        fs::write(
+            skill_dir.join("SKILL.md"),
+            "---\nname: managed-skill\ndescription: Managed\n---\n",
+        )
+        .unwrap();
+        fs::create_dir_all(codex_root.join("managed-skill")).unwrap();
+        fs::write(
+            codex_root.join("managed-skill").join("SKILL.md"),
+            "# Managed copy\n",
+        )
+        .unwrap();
+        fs::write(
+            codex_root
+                .join("managed-skill")
+                .join(".skills-manage-link.json"),
+            serde_json::json!({
+                "sourcePath": skill_dir.display().to_string(),
+                "targetId": "codex",
+                "targetName": "Codex",
+                "managedBy": "Skills Manage",
+                "createdAtUnixMs": 1
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        let skills = scan_skill_roots_with_target_roots(
+            &[library_root.clone()],
+            &[("codex", codex_root.clone())],
+        );
+
+        let codex = skills[0]
+            .targets
+            .iter()
+            .find(|target| target.id == "codex")
+            .unwrap();
+        assert!(codex.enabled);
+
+        fs::remove_dir_all(temp_root).unwrap();
+        fs::remove_dir_all(codex_root).unwrap();
     }
 
     fn unique_temp_dir(prefix: &str) -> PathBuf {
