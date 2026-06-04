@@ -1,4 +1,5 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import {
   Archive,
   Boxes,
@@ -38,12 +39,40 @@ const sections = [
   { label: "Settings", icon: Settings, active: false },
 ];
 
+type ScanState = "scanning" | "ready" | "error";
+
 function App() {
   const [query, setQuery] = useState("");
-  const [selectedId, setSelectedId] = useState(demoSkills[0]?.id ?? "");
-  const filteredSkills = useMemo(() => filterSkills(demoSkills, query), [query]);
+  const [skills, setSkills] = useState<SkillRecord[]>([]);
+  const [selectedId, setSelectedId] = useState("");
+  const [scanState, setScanState] = useState<ScanState>("scanning");
+  const [scanError, setScanError] = useState("");
+  const visibleSkills = skills.length > 0 ? skills : demoSkills;
+  const usingFallback = scanState === "ready" && skills.length === 0;
+  const filteredSkills = useMemo(() => filterSkills(visibleSkills, query), [query, visibleSkills]);
   const selectedSkill = filteredSkills.find((skill) => skill.id === selectedId) ?? filteredSkills[0];
-  const stats = useMemo(() => getSkillStats(demoSkills), []);
+  const stats = useMemo(() => getSkillStats(visibleSkills), [visibleSkills]);
+
+  async function loadSkills() {
+    setScanState("scanning");
+    setScanError("");
+
+    try {
+      const scannedSkills = await invoke<SkillRecord[]>("scan_skills");
+      setSkills(scannedSkills);
+      setSelectedId(scannedSkills[0]?.id ?? demoSkills[0]?.id ?? "");
+      setScanState("ready");
+    } catch (error) {
+      setSkills([]);
+      setSelectedId(demoSkills[0]?.id ?? "");
+      setScanError(error instanceof Error ? error.message : "Unable to scan local folders.");
+      setScanState("error");
+    }
+  }
+
+  useEffect(() => {
+    void loadSkills();
+  }, []);
 
   return (
     <main className="app-shell">
@@ -104,9 +133,27 @@ function App() {
               onChange={(event) => setQuery(event.currentTarget.value)}
             />
           </label>
-          <button className="icon-action" type="button" aria-label="Scan local skills" disabled>
+          <button
+            className="icon-action"
+            type="button"
+            aria-label="Scan local skills"
+            disabled={scanState === "scanning"}
+            onClick={() => void loadSkills()}
+          >
             <RefreshCw size={18} strokeWidth={1.8} />
           </button>
+        </div>
+
+        <div className={`scan-status ${scanState === "error" ? "error" : ""}`} role="status">
+          {scanState === "scanning" ? (
+            <span>Scanning local folders</span>
+          ) : scanState === "error" ? (
+            <span>Scan unavailable: {scanError}</span>
+          ) : usingFallback ? (
+            <span>No local skills found. Showing sample records.</span>
+          ) : (
+            <span>Scan complete. Showing local skills.</span>
+          )}
         </div>
 
         <div className="skills-list" aria-label="Discovered skills">
