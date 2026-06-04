@@ -27,6 +27,13 @@ const sharedLibrarySkill = {
   targets: scannedCodexSkill.targets.map((target) => ({ ...target, enabled: false })),
 };
 
+const sharedLibrarySkillWithCodexEnabled = {
+  ...sharedLibrarySkill,
+  targets: sharedLibrarySkill.targets.map((target) =>
+    target.id === "codex" ? { ...target, enabled: true } : target,
+  ),
+};
+
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: (...args: unknown[]) => invokeMock(...args),
 }));
@@ -87,5 +94,44 @@ describe("App", () => {
     );
     await waitFor(() => expect(screen.getByText(/Imported local-scan-skill/i)).toBeInTheDocument());
     expect(screen.getAllByText("Shared Library").length).toBeGreaterThan(0);
+  });
+
+  it("enables the selected shared-library skill for a target and refreshes the scan", async () => {
+    let scanCount = 0;
+    invokeMock.mockImplementation((command: string) => {
+      if (command === "scan_skills") {
+        scanCount += 1;
+        return Promise.resolve(scanCount === 1 ? [sharedLibrarySkill] : [sharedLibrarySkillWithCodexEnabled]);
+      }
+
+      if (command === "set_skill_target_enabled") {
+        return Promise.resolve({
+          targetId: "codex",
+          targetName: "Codex",
+          skillName: "local-scan-skill",
+          enabled: true,
+          changed: true,
+          targetPath: "C:/Users/example/.codex/skills/local-scan-skill",
+          message: "Enabled local-scan-skill for Codex.",
+        });
+      }
+
+      return Promise.reject(new Error(`Unexpected command: ${command}`));
+    });
+
+    render(<App />);
+    await waitFor(() => expect(screen.getAllByText("local-scan-skill").length).toBeGreaterThan(0));
+
+    fireEvent.click(screen.getByRole("button", { name: "Enable Codex" }));
+
+    await waitFor(() =>
+      expect(invokeMock).toHaveBeenCalledWith("set_skill_target_enabled", {
+        sourcePath: sharedLibrarySkill.sourcePath,
+        targetId: "codex",
+        enabled: true,
+      }),
+    );
+    await waitFor(() => expect(screen.getByText(/Enabled local-scan-skill for Codex/i)).toBeInTheDocument());
+    expect(screen.getByRole("button", { name: "Disable Codex" })).toBeInTheDocument();
   });
 });

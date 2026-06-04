@@ -10,8 +10,8 @@ export const demoSkills: SkillRecord[] = [
     health: "healthy",
     targets: [
       { id: "codex", name: "Codex", enabled: true },
-      { id: "claude", name: "Claude Code", enabled: false },
-      { id: "vscode", name: "VS Code", enabled: false },
+      { id: "claude-code", name: "Claude Code", enabled: false },
+      { id: "vs-code", name: "VS Code", enabled: false },
     ],
     supportFiles: ["SKILL.md", "references/workflow.md"],
   },
@@ -24,8 +24,8 @@ export const demoSkills: SkillRecord[] = [
     health: "warning",
     targets: [
       { id: "codex", name: "Codex", enabled: true },
-      { id: "claude", name: "Claude Code", enabled: true },
-      { id: "vscode", name: "VS Code", enabled: false },
+      { id: "claude-code", name: "Claude Code", enabled: true },
+      { id: "vs-code", name: "VS Code", enabled: false },
     ],
     supportFiles: ["SKILL.md", "scripts/validate-tools.ps1"],
   },
@@ -38,8 +38,8 @@ export const demoSkills: SkillRecord[] = [
     health: "healthy",
     targets: [
       { id: "codex", name: "Codex", enabled: false },
-      { id: "claude", name: "Claude Code", enabled: true },
-      { id: "vscode", name: "VS Code", enabled: true },
+      { id: "claude-code", name: "Claude Code", enabled: true },
+      { id: "vs-code", name: "VS Code", enabled: true },
     ],
     supportFiles: ["SKILL.md", "assets/checklist.json"],
   },
@@ -52,8 +52,8 @@ export const demoSkills: SkillRecord[] = [
     health: "broken",
     targets: [
       { id: "codex", name: "Codex", enabled: false },
-      { id: "claude", name: "Claude Code", enabled: false },
-      { id: "vscode", name: "VS Code", enabled: false },
+      { id: "claude-code", name: "Claude Code", enabled: false },
+      { id: "vs-code", name: "VS Code", enabled: false },
     ],
     supportFiles: ["SKILL.md", "manifest.json"],
   },

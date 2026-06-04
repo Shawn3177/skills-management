@@ -473,6 +473,21 @@ h3 {
   font-weight: 700;
 }
 
+.target-row button:not(:disabled) {
+  border-color: rgba(15, 138, 157, 0.42);
+  background: #eef7f8;
+  color: var(--accent-strong);
+  cursor: pointer;
+}
+
+.target-row button:not(:disabled):hover {
+  background: #dff2f5;
+}
+
+.target-row button:not(:disabled):active {
+  transform: translateY(1px);
+}
+
 .action-bar {
   display: flex;
   flex-wrap: wrap;
@@ -511,7 +526,8 @@ h3 {
   opacity: 0.72;
 }
 
-.import-status {
+.import-status,
+.target-action-status {
   min-height: 38px;
   padding: 10px 12px;
   border: 1px solid rgba(15, 138, 157, 0.24);
@@ -522,7 +538,8 @@ h3 {
   font-weight: 700;
 }
 
-.import-status.error {
+.import-status.error,
+.target-action-status.error {
   border-color: rgba(180, 35, 53, 0.24);
   background: #fff4f4;
   color: var(--danger);

@@ -50,6 +50,20 @@ type ImportResult = {
   message: string;
 };
 
+type TargetActionState = "idle" | "saving" | "success" | "error";
+
+type TargetToggleResult = {
+  targetId: string;
+  targetName: string;
+  skillName: string;
+  enabled: boolean;
+  changed: boolean;
+  targetPath: string;
+  message: string;
+};
+
+const toggleableTargetIds = new Set(["codex", "claude-code"]);
+
 function App() {
   const [query, setQuery] = useState("");
   const [skills, setSkills] = useState<SkillRecord[]>([]);
@@ -58,6 +72,9 @@ function App() {
   const [scanError, setScanError] = useState("");
   const [importState, setImportState] = useState<ImportState>("idle");
   const [importMessage, setImportMessage] = useState("");
+  const [targetActionState, setTargetActionState] = useState<TargetActionState>("idle");
+  const [targetActionMessage, setTargetActionMessage] = useState("");
+  const [targetActionTargetId, setTargetActionTargetId] = useState("");
   const visibleSkills = skills.length > 0 ? skills : demoSkills;
   const usingFallback = scanState === "ready" && skills.length === 0;
   const filteredSkills = useMemo(() => filterSkills(visibleSkills, query), [query, visibleSkills]);
@@ -67,7 +84,9 @@ function App() {
     !selectedSkill ||
     selectedSkill.source === "Shared Library" ||
     scanState === "scanning" ||
-    importState === "importing";
+    importState === "importing" ||
+    targetActionState === "saving";
+  const targetToggleLocked = scanState === "scanning" || importState === "importing" || targetActionState === "saving";
 
   async function loadSkills() {
     setScanState("scanning");
@@ -83,6 +102,43 @@ function App() {
       setSelectedId(demoSkills[0]?.id ?? "");
       setScanError(error instanceof Error ? error.message : "Unable to scan local folders.");
       setScanState("error");
+    }
+  }
+
+  async function toggleSkillTarget(target: { id: string; name: string; enabled: boolean }) {
+    if (!selectedSkill || selectedSkill.source !== "Shared Library" || !toggleableTargetIds.has(target.id)) {
+      return;
+    }
+
+    const nextEnabled = !target.enabled;
+    setTargetActionState("saving");
+    setTargetActionTargetId(target.id);
+    setTargetActionMessage(`${nextEnabled ? "Enabling" : "Disabling"} ${selectedSkill.name} for ${target.name}.`);
+
+    try {
+      const result = await invoke<TargetToggleResult>("set_skill_target_enabled", {
+        sourcePath: selectedSkill.sourcePath,
+        targetId: target.id,
+        enabled: nextEnabled,
+      });
+      setTargetActionState("success");
+      setTargetActionMessage(
+        result.enabled
+          ? `Enabled ${result.skillName} for ${result.targetName}.`
+          : `Disabled ${result.skillName} for ${result.targetName}.`,
+      );
+      await loadSkills();
+    } catch (error) {
+      setTargetActionState("error");
+      setTargetActionMessage(
+        error instanceof Error
+          ? error.message
+          : typeof error === "string"
+            ? error
+            : `Could not update ${target.name}. Check the target folder and try again.`,
+      );
+    } finally {
+      setTargetActionTargetId("");
     }
   }
 
@@ -229,6 +285,11 @@ function App() {
             importMessage={importMessage}
             importState={importState}
             onImport={() => void importSelectedSkill()}
+            onToggleTarget={(target) => void toggleSkillTarget(target)}
+            targetActionMessage={targetActionMessage}
+            targetActionState={targetActionState}
+            targetActionTargetId={targetActionTargetId}
+            targetToggleLocked={targetToggleLocked}
           />
         ) : null}
       </section>
@@ -286,12 +347,22 @@ function SkillDetail({
   importMessage,
   importState,
   onImport,
+  onToggleTarget,
+  targetActionMessage,
+  targetActionState,
+  targetActionTargetId,
+  targetToggleLocked,
 }: {
   skill: SkillRecord;
   importDisabled: boolean;
   importMessage: string;
   importState: ImportState;
   onImport: () => void;
+  onToggleTarget: (target: { id: string; name: string; enabled: boolean }) => void;
+  targetActionMessage: string;
+  targetActionState: TargetActionState;
+  targetActionTargetId: string;
+  targetToggleLocked: boolean;
 }) {
   const Icon = healthIcons[skill.health];
   const importLabel =
@@ -339,17 +410,29 @@ function SkillDetail({
           <ShieldCheck size={17} strokeWidth={1.8} aria-hidden="true" />
         </div>
         <div className="target-list">
-          {skill.targets.map((target) => (
-            <div className="target-row" key={target.id}>
-              <span>
-                <strong>{target.name}</strong>
-                <small>{target.enabled ? "Managed link is active" : "Not enabled for this tool"}</small>
-              </span>
-              <button type="button" disabled>
-                {target.enabled ? "Disable" : "Enable"}
-              </button>
-            </div>
-          ))}
+          {skill.targets.map((target) => {
+            const canToggle = skill.source === "Shared Library" && toggleableTargetIds.has(target.id) && !targetToggleLocked;
+            const actionVerb = target.enabled ? "Disable" : "Enable";
+            const actionLabel = `${actionVerb} ${target.name}`;
+            const savingThisTarget = targetActionState === "saving" && targetActionTargetId === target.id;
+
+            return (
+              <div className="target-row" key={target.id}>
+                <span>
+                  <strong>{target.name}</strong>
+                  <small>{target.enabled ? "Managed copy is active" : "Not enabled for this tool"}</small>
+                </span>
+                <button
+                  type="button"
+                  disabled={!canToggle}
+                  aria-label={actionLabel}
+                  onClick={() => onToggleTarget(target)}
+                >
+                  {savingThisTarget ? "Saving" : actionVerb}
+                </button>
+              </div>
+            );
+          })}
         </div>
       </section>
 
@@ -381,6 +464,15 @@ function SkillDetail({
           role={importState === "error" ? "alert" : "status"}
         >
           {importMessage}
+        </div>
+      ) : null}
+
+      {targetActionMessage ? (
+        <div
+          className={`target-action-status ${targetActionState === "error" ? "error" : "success"}`}
+          role={targetActionState === "error" ? "alert" : "status"}
+        >
+          {targetActionMessage}
         </div>
       ) : null}
     </div>

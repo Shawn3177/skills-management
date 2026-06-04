@@ -2,8 +2,10 @@ use serde::Serialize;
 
 mod library;
 mod scanner;
+mod targets;
 use library::{import_skill_to_library as import_skill_to_library_impl, ImportResult};
 use scanner::{scan_default_skills, ScannedSkill};
+use targets::{set_skill_target_enabled as set_skill_target_enabled_impl, TargetToggleResult};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct AppStatus {
@@ -39,6 +41,15 @@ fn import_skill_to_library(source_path: String) -> Result<ImportResult, String> 
     import_skill_to_library_impl(source_path)
 }
 
+#[tauri::command]
+fn set_skill_target_enabled(
+    source_path: String,
+    target_id: String,
+    enabled: bool,
+) -> Result<TargetToggleResult, String> {
+    set_skill_target_enabled_impl(source_path, target_id, enabled)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -46,7 +57,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             get_app_status,
             scan_skills,
-            import_skill_to_library
+            import_skill_to_library,
+            set_skill_target_enabled
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
