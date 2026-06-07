@@ -41,24 +41,39 @@ vi.mock("@tauri-apps/api/core", () => ({
 describe("App", () => {
   beforeEach(() => {
     invokeMock.mockReset();
+    localStorage.clear();
   });
 
   afterEach(() => {
     cleanup();
   });
 
-  it("renders scanned backend skills when scan_skills returns records", async () => {
+  it("renders scanned backend skills with Chinese UI by default", async () => {
     invokeMock.mockResolvedValue([scannedCodexSkill]);
 
     render(<App />);
 
     expect(screen.getByRole("heading", { name: /Skills Manage/i })).toBeInTheDocument();
-    expect(screen.getByRole("searchbox", { name: /Search skills/i })).toBeInTheDocument();
-    expect(screen.getByText("Preview safe mode")).toBeInTheDocument();
-    expect(screen.getByText("Scanning local folders")).toBeInTheDocument();
+    expect(screen.getByRole("searchbox", { name: /搜索技能/i })).toBeInTheDocument();
+    expect(screen.getByText("预览安全模式")).toBeInTheDocument();
+    expect(screen.getByText("正在扫描本地文件夹")).toBeInTheDocument();
 
     await waitFor(() => expect(screen.getAllByText("local-scan-skill").length).toBeGreaterThan(0));
     expect(invokeMock).toHaveBeenCalledWith("scan_skills");
+  });
+
+  it("switches the visible app chrome to English without changing skill data", async () => {
+    invokeMock.mockResolvedValue([scannedCodexSkill]);
+
+    render(<App />);
+    await waitFor(() => expect(screen.getAllByText("local-scan-skill").length).toBeGreaterThan(0));
+
+    fireEvent.click(screen.getByRole("button", { name: "EN" }));
+
+    expect(screen.getByRole("searchbox", { name: /Search skills/i })).toBeInTheDocument();
+    expect(screen.getByText("Preview safe mode")).toBeInTheDocument();
+    expect(screen.getAllByText("local-scan-skill").length).toBeGreaterThan(0);
+    expect(localStorage.getItem("skills-manage.locale")).toBe("en-US");
   });
 
   it("imports the selected skill into the shared library and refreshes the scan", async () => {
@@ -85,14 +100,14 @@ describe("App", () => {
     render(<App />);
     await waitFor(() => expect(screen.getAllByText("local-scan-skill").length).toBeGreaterThan(0));
 
-    fireEvent.click(screen.getByRole("button", { name: /Import to library/i }));
+    fireEvent.click(screen.getByRole("button", { name: /导入共享库/i }));
 
     await waitFor(() =>
       expect(invokeMock).toHaveBeenCalledWith("import_skill_to_library", {
         sourcePath: scannedCodexSkill.sourcePath,
       }),
     );
-    await waitFor(() => expect(screen.getByText(/Imported local-scan-skill/i)).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText(/已将 local-scan-skill 导入共享库/i)).toBeInTheDocument());
     expect(screen.getAllByText("Shared Library").length).toBeGreaterThan(0);
   });
 
@@ -122,7 +137,7 @@ describe("App", () => {
     render(<App />);
     await waitFor(() => expect(screen.getAllByText("local-scan-skill").length).toBeGreaterThan(0));
 
-    fireEvent.click(screen.getByRole("button", { name: "Enable Codex" }));
+    fireEvent.click(screen.getByRole("button", { name: "启用 Codex" }));
 
     await waitFor(() =>
       expect(invokeMock).toHaveBeenCalledWith("set_skill_target_enabled", {
@@ -131,7 +146,7 @@ describe("App", () => {
         enabled: true,
       }),
     );
-    await waitFor(() => expect(screen.getByText(/Enabled local-scan-skill for Codex/i)).toBeInTheDocument());
-    expect(screen.getByRole("button", { name: "Disable Codex" })).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByText(/已为 Codex 启用 local-scan-skill/i)).toBeInTheDocument());
+    expect(screen.getByRole("button", { name: "停用 Codex" })).toBeInTheDocument();
   });
 });

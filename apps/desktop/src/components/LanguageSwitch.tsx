@@ -1,14 +1,16 @@
 import { localeLabels, locales, type Locale } from "../i18n/messages";
 
 export function LanguageSwitch({
+  label = "Language",
   locale,
   onLocaleChange,
 }: {
+  label?: string;
   locale: Locale;
   onLocaleChange: (locale: Locale) => void;
 }) {
   return (
-    <div className="language-switch" aria-label="Language">
+    <div className="language-switch" aria-label={label}>
       {locales.map((item) => (
         <button
           aria-pressed={locale === item}

@@ -17,13 +17,16 @@ import {
   SlidersHorizontal,
 } from "lucide-react";
 import "./App.css";
+import { LanguageSwitch } from "./components/LanguageSwitch";
 import { demoSkills } from "./data/demoSkills";
+import { useLocale } from "./i18n/useLocale";
 import { filterSkills, getSkillStats, type SkillHealth, type SkillRecord } from "./lib/skills";
+import type { MessageKey } from "./i18n/messages";
 
-const healthLabels: Record<SkillHealth, string> = {
-  healthy: "Healthy",
-  warning: "Needs review",
-  broken: "Broken",
+const healthLabelKeys: Record<SkillHealth, MessageKey> = {
+  healthy: "health.healthy",
+  warning: "health.warning",
+  broken: "health.broken",
 };
 
 const healthIcons = {
@@ -33,11 +36,11 @@ const healthIcons = {
 };
 
 const sections = [
-  { label: "Skills", icon: Boxes, active: true },
-  { label: "Import", icon: FolderInput, active: false },
-  { label: "Packages", icon: PackageOpen, active: false },
-  { label: "Settings", icon: Settings, active: false },
-];
+  { key: "nav.skills", icon: Boxes, active: true },
+  { key: "nav.import", icon: FolderInput, active: false },
+  { key: "nav.packages", icon: PackageOpen, active: false },
+  { key: "nav.settings", icon: Settings, active: false },
+] satisfies Array<{ key: MessageKey; icon: typeof Boxes; active: boolean }>;
 
 type ScanState = "scanning" | "ready" | "error";
 type ImportState = "idle" | "importing" | "success" | "error";
@@ -62,9 +65,12 @@ type TargetToggleResult = {
   message: string;
 };
 
+type TFunction = ReturnType<typeof useLocale>["t"];
+
 const toggleableTargetIds = new Set(["codex", "claude-code"]);
 
 function App() {
+  const { locale, setLocale, t } = useLocale();
   const [query, setQuery] = useState("");
   const [skills, setSkills] = useState<SkillRecord[]>([]);
   const [selectedId, setSelectedId] = useState("");
@@ -100,7 +106,7 @@ function App() {
     } catch (error) {
       setSkills([]);
       setSelectedId(demoSkills[0]?.id ?? "");
-      setScanError(error instanceof Error ? error.message : "Unable to scan local folders.");
+      setScanError(error instanceof Error ? error.message : t("errors.scanFallback"));
       setScanState("error");
     }
   }
@@ -113,7 +119,12 @@ function App() {
     const nextEnabled = !target.enabled;
     setTargetActionState("saving");
     setTargetActionTargetId(target.id);
-    setTargetActionMessage(`${nextEnabled ? "Enabling" : "Disabling"} ${selectedSkill.name} for ${target.name}.`);
+    setTargetActionMessage(
+      t(nextEnabled ? "actions.enablingSkillForTarget" : "actions.disablingSkillForTarget", {
+        skillName: selectedSkill.name,
+        targetName: target.name,
+      }),
+    );
 
     try {
       const result = await invoke<TargetToggleResult>("set_skill_target_enabled", {
@@ -123,9 +134,10 @@ function App() {
       });
       setTargetActionState("success");
       setTargetActionMessage(
-        result.enabled
-          ? `Enabled ${result.skillName} for ${result.targetName}.`
-          : `Disabled ${result.skillName} for ${result.targetName}.`,
+        t(result.enabled ? "actions.enabledSkillForTarget" : "actions.disabledSkillForTarget", {
+          skillName: result.skillName,
+          targetName: result.targetName,
+        }),
       );
       await loadSkills();
     } catch (error) {
@@ -135,7 +147,7 @@ function App() {
           ? error.message
           : typeof error === "string"
             ? error
-            : `Could not update ${target.name}. Check the target folder and try again.`,
+            : t("errors.targetFallback", { targetName: target.name }),
       );
     } finally {
       setTargetActionTargetId("");
@@ -148,7 +160,7 @@ function App() {
     }
 
     setImportState("importing");
-    setImportMessage(`Importing ${selectedSkill.name} into the shared library.`);
+    setImportMessage(t("actions.importingSkill", { skillName: selectedSkill.name }));
 
     try {
       const result = await invoke<ImportResult>("import_skill_to_library", {
@@ -157,8 +169,8 @@ function App() {
       setImportState("success");
       setImportMessage(
         result.imported
-          ? `Imported ${result.skillName} into the shared library.`
-          : result.message || `${result.skillName} is already in the shared library.`,
+          ? t("actions.importedSkill", { skillName: result.skillName })
+          : result.message || t("actions.skillAlreadyManaged", { skillName: result.skillName }),
       );
       await loadSkills();
     } catch (error) {
@@ -168,7 +180,7 @@ function App() {
           ? error.message
           : typeof error === "string"
             ? error
-            : "Import failed. Check the skill folder and try again.",
+            : t("errors.importFallback"),
       );
     }
   }
@@ -179,59 +191,70 @@ function App() {
 
   return (
     <main className="app-shell">
-      <aside className="rail" aria-label="Primary navigation">
-        <div className="brand-mark" aria-hidden="true">
-          SM
+      <header className="topbar" aria-label={t("regions.appControls")}>
+        <div className="window-dots" aria-hidden="true">
+          <span />
+          <span />
+          <span />
         </div>
-        <nav className="rail-nav">
+        <div className="brand-block">
+          <strong>{t("app.title")}</strong>
+          <span>{t("app.subtitle")}</span>
+        </div>
+        <nav className="module-tabs" aria-label={t("regions.primaryNavigation")}>
           {sections.map((section) => {
             const Icon = section.icon;
+            const label = t(section.key);
             return (
               <button
-                className={`rail-button ${section.active ? "active" : ""}`}
+                className={`module-tab ${section.active ? "active" : ""}`}
                 type="button"
-                key={section.label}
+                key={section.key}
                 aria-current={section.active ? "page" : undefined}
-                aria-label={section.label}
+                aria-label={label}
+                disabled={!section.active}
               >
-                <Icon size={19} strokeWidth={1.8} />
-                <span>{section.label}</span>
+                <Icon size={18} strokeWidth={1.8} />
+                <span>{label}</span>
               </button>
             );
           })}
         </nav>
-        <button className="rail-icon-button" type="button" aria-label="Workflow settings" disabled>
-          <SlidersHorizontal size={19} strokeWidth={1.8} />
-        </button>
-      </aside>
+        <div className="topbar-actions">
+          <LanguageSwitch label={t("language.label")} locale={locale} onLocaleChange={setLocale} />
+          <button className="topbar-icon-button" type="button" aria-label={t("app.workflowSettings")} disabled>
+            <SlidersHorizontal size={18} strokeWidth={1.8} />
+          </button>
+        </div>
+      </header>
 
-      <section className="library-pane" aria-label="Skills library">
+      <section className="library-pane" aria-label={t("regions.skillsLibrary")}>
         <header className="pane-header">
           <div>
-            <p className="eyebrow">Local skills library</p>
-            <h1>Skills Manage</h1>
+            <p className="eyebrow">{t("app.subtitle")}</p>
+            <h1>{t("app.title")}</h1>
           </div>
           <span className="mode-pill">
             <ShieldCheck size={16} strokeWidth={1.8} />
-            Preview safe mode
+            {t("app.safeMode")}
           </span>
         </header>
 
         <div className="stat-grid" aria-label="Library summary">
-          <SummaryStat label="Skills" value={stats.total} />
-          <SummaryStat label="Healthy" value={stats.healthy} />
-          <SummaryStat label="Review" value={stats.warnings} />
-          <SummaryStat label="Enabled links" value={stats.enabledTargets} />
+          <SummaryStat label={t("stats.skills")} value={stats.total} />
+          <SummaryStat label={t("stats.healthy")} value={stats.healthy} />
+          <SummaryStat label={t("stats.review")} value={stats.warnings} />
+          <SummaryStat label={t("stats.enabledLinks")} value={stats.enabledTargets} />
         </div>
 
         <div className="toolbar">
           <label className="search-field">
             <Search size={17} strokeWidth={1.8} aria-hidden="true" />
-            <span className="sr-only">Search skills</span>
+            <span className="sr-only">{t("search.label")}</span>
             <input
-              aria-label="Search skills"
+              aria-label={t("search.label")}
               type="search"
-              placeholder="Search skills, sources, paths"
+              placeholder={t("search.placeholder")}
               value={query}
               onChange={(event) => setQuery(event.currentTarget.value)}
             />
@@ -239,7 +262,7 @@ function App() {
           <button
             className="icon-action"
             type="button"
-            aria-label="Scan local skills"
+            aria-label={t("actions.scan")}
             disabled={scanState === "scanning"}
             onClick={() => void loadSkills()}
           >
@@ -249,13 +272,13 @@ function App() {
 
         <div className={`scan-status ${scanState === "error" ? "error" : ""}`} role="status">
           {scanState === "scanning" ? (
-            <span>Scanning local folders</span>
+            <span>{t("status.scan.scanning")}</span>
           ) : scanState === "error" ? (
-            <span>Scan unavailable: {scanError}</span>
+            <span>{t("status.scan.error", { error: scanError })}</span>
           ) : usingFallback ? (
-            <span>No local skills found. Showing sample records.</span>
+            <span>{t("status.scan.fallback")}</span>
           ) : (
-            <span>Scan complete. Showing local skills.</span>
+            <span>{t("status.scan.ready")}</span>
           )}
         </div>
 
@@ -266,18 +289,21 @@ function App() {
               skill={skill}
               selected={skill.id === selectedSkill?.id}
               onSelect={() => setSelectedId(skill.id)}
+              targetCountText={t("targets.count", {
+                count: skill.targets.filter((target) => target.enabled).length,
+              })}
             />
           ))}
           {filteredSkills.length === 0 ? (
             <div className="empty-state">
-              <p>No skills match this search.</p>
-              <span>Try a tool name, folder, or support file.</span>
+              <p>{t("status.empty.title")}</p>
+              <span>{t("status.empty.body")}</span>
             </div>
           ) : null}
         </div>
       </section>
 
-      <section className="detail-pane" aria-label="Skill detail">
+      <section className="detail-pane" aria-label={t("regions.skillDetail")}>
         {selectedSkill ? (
           <SkillDetail
             skill={selectedSkill}
@@ -290,14 +316,15 @@ function App() {
             targetActionState={targetActionState}
             targetActionTargetId={targetActionTargetId}
             targetToggleLocked={targetToggleLocked}
+            t={t}
           />
         ) : null}
       </section>
 
-      <footer className="status-strip" aria-label="App status">
-        <span>Data root: %USERPROFILE%\.skills-manage</span>
-        <span>Backup mode: before every managed write</span>
-        <span>Package format: .skillpack</span>
+      <footer className="status-strip" aria-label={t("regions.appStatus")}>
+        <span>{t("footer.dataRoot")}</span>
+        <span>{t("footer.backupMode")}</span>
+        <span>{t("footer.packageFormat")}</span>
       </footer>
     </main>
   );
@@ -316,13 +343,14 @@ function SkillListItem({
   skill,
   selected,
   onSelect,
+  targetCountText,
 }: {
   skill: SkillRecord;
   selected: boolean;
   onSelect: () => void;
+  targetCountText: string;
 }) {
   const Icon = healthIcons[skill.health];
-  const enabledCount = skill.targets.filter((target) => target.enabled).length;
 
   return (
     <button className={`skill-row ${selected ? "selected" : ""}`} type="button" onClick={onSelect}>
@@ -335,7 +363,7 @@ function SkillListItem({
       </span>
       <span className="skill-row-meta">
         <span>{skill.source}</span>
-        <span>{enabledCount} targets</span>
+        <span>{targetCountText}</span>
       </span>
     </button>
   );
@@ -352,6 +380,7 @@ function SkillDetail({
   targetActionState,
   targetActionTargetId,
   targetToggleLocked,
+  t,
 }: {
   skill: SkillRecord;
   importDisabled: boolean;
@@ -363,21 +392,26 @@ function SkillDetail({
   targetActionState: TargetActionState;
   targetActionTargetId: string;
   targetToggleLocked: boolean;
+  t: TFunction;
 }) {
   const Icon = healthIcons[skill.health];
   const importLabel =
-    skill.source === "Shared Library" ? "Already in library" : importState === "importing" ? "Importing" : "Import to library";
+    skill.source === "Shared Library"
+      ? t("actions.alreadyInLibrary")
+      : importState === "importing"
+        ? t("actions.importing")
+        : t("actions.importToLibrary");
 
   return (
     <div className="detail-content">
       <header className="detail-header">
         <div>
-          <p className="eyebrow">Selected skill</p>
+          <p className="eyebrow">{t("detail.eyebrow")}</p>
           <h2>{skill.name}</h2>
         </div>
         <span className={`health-badge ${skill.health}`}>
           <Icon size={16} strokeWidth={1.9} />
-          {healthLabels[skill.health]}
+          {t(healthLabelKeys[skill.health])}
         </span>
       </header>
 
@@ -385,20 +419,20 @@ function SkillDetail({
 
       <section className="detail-section" aria-labelledby="metadata-heading">
         <div className="section-title-row">
-          <h3 id="metadata-heading">Metadata</h3>
+          <h3 id="metadata-heading">{t("detail.metadata")}</h3>
           <Gauge size={17} strokeWidth={1.8} aria-hidden="true" />
         </div>
         <dl className="metadata-grid">
           <div>
-            <dt>Source</dt>
+            <dt>{t("detail.source")}</dt>
             <dd>{skill.source}</dd>
           </div>
           <div>
-            <dt>Path</dt>
+            <dt>{t("detail.path")}</dt>
             <dd>{skill.sourcePath}</dd>
           </div>
           <div>
-            <dt>Support files</dt>
+            <dt>{t("detail.supportFiles")}</dt>
             <dd>{skill.supportFiles.join(", ")}</dd>
           </div>
         </dl>
@@ -406,21 +440,27 @@ function SkillDetail({
 
       <section className="detail-section" aria-labelledby="targets-heading">
         <div className="section-title-row">
-          <h3 id="targets-heading">Target tools</h3>
+          <h3 id="targets-heading">{t("detail.targets")}</h3>
           <ShieldCheck size={17} strokeWidth={1.8} aria-hidden="true" />
         </div>
         <div className="target-list">
           {skill.targets.map((target) => {
             const canToggle = skill.source === "Shared Library" && toggleableTargetIds.has(target.id) && !targetToggleLocked;
-            const actionVerb = target.enabled ? "Disable" : "Enable";
+            const actionVerb = target.enabled ? t("actions.disable") : t("actions.enable");
             const actionLabel = `${actionVerb} ${target.name}`;
             const savingThisTarget = targetActionState === "saving" && targetActionTargetId === target.id;
+            const targetStatus =
+              skill.source === "Shared Library"
+                ? target.enabled
+                  ? t("targets.enabled")
+                  : t("targets.disabled")
+                : t("targets.unavailable");
 
             return (
               <div className="target-row" key={target.id}>
                 <span>
                   <strong>{target.name}</strong>
-                  <small>{target.enabled ? "Managed copy is active" : "Not enabled for this tool"}</small>
+                  <small>{targetStatus}</small>
                 </span>
                 <button
                   type="button"
@@ -428,7 +468,7 @@ function SkillDetail({
                   aria-label={actionLabel}
                   onClick={() => onToggleTarget(target)}
                 >
-                  {savingThisTarget ? "Saving" : actionVerb}
+                  {savingThisTarget ? t("actions.saving") : actionVerb}
                 </button>
               </div>
             );
@@ -436,7 +476,7 @@ function SkillDetail({
         </div>
       </section>
 
-      <section className="action-bar" aria-label="Skill actions">
+      <section className="action-bar" aria-label={t("regions.skillActions")}>
         <button
           className="primary-action"
           type="button"
@@ -449,11 +489,11 @@ function SkillDetail({
         </button>
         <button type="button" disabled>
           <Archive size={17} strokeWidth={1.8} />
-          Repair
+          {t("actions.repair")}
         </button>
         <button type="button" disabled>
           <Download size={17} strokeWidth={1.8} />
-          Export .skillpack
+          {t("actions.exportSkillpack")}
         </button>
       </section>
 

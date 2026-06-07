@@ -1,5 +1,5 @@
 import { useCallback, useMemo, useState } from "react";
-import { defaultLocale, formatMessage, isLocale, type Locale, type MessageParams } from "./messages";
+import { defaultLocale, formatMessage, isLocale, type Locale, type MessageKey, type MessageParams } from "./messages";
 
 export const localeStorageKey = "skills-manage.locale";
 
@@ -21,7 +21,7 @@ export function useLocale() {
   }, []);
 
   const t = useCallback(
-    (key: string, params?: MessageParams) => formatMessage(locale, key, params),
+    (key: MessageKey, params?: MessageParams) => formatMessage(locale, key, params),
     [locale],
   );
 

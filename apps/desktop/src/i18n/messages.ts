@@ -9,11 +9,18 @@ export const localeLabels: Record<Locale, string> = {
   "en-US": "EN",
 };
 
-type MessageKey =
+export type MessageKey =
   | "app.title"
   | "app.subtitle"
   | "app.safeMode"
   | "app.workflowSettings"
+  | "regions.appControls"
+  | "regions.primaryNavigation"
+  | "regions.skillsLibrary"
+  | "regions.skillDetail"
+  | "regions.skillActions"
+  | "regions.appStatus"
+  | "language.label"
   | "nav.skills"
   | "nav.import"
   | "nav.packages"
@@ -58,6 +65,7 @@ type MessageKey =
   | "targets.enabled"
   | "targets.disabled"
   | "targets.unavailable"
+  | "targets.count"
   | "footer.dataRoot"
   | "footer.backupMode"
   | "footer.packageFormat"
@@ -73,6 +81,13 @@ export const messages: Record<Locale, Record<MessageKey, string>> = {
     "app.subtitle": "本地 Skills 控制台",
     "app.safeMode": "预览安全模式",
     "app.workflowSettings": "工作流设置",
+    "regions.appControls": "应用控制",
+    "regions.primaryNavigation": "主导航",
+    "regions.skillsLibrary": "技能库",
+    "regions.skillDetail": "技能详情",
+    "regions.skillActions": "技能操作",
+    "regions.appStatus": "应用状态",
+    "language.label": "语言",
     "nav.skills": "技能",
     "nav.import": "导入",
     "nav.packages": "包",
@@ -117,6 +132,7 @@ export const messages: Record<Locale, Record<MessageKey, string>> = {
     "targets.enabled": "托管副本已启用",
     "targets.disabled": "未为此工具启用",
     "targets.unavailable": "先导入共享库后可启用",
+    "targets.count": "{count} 个目标",
     "footer.dataRoot": "数据根目录：%USERPROFILE%\\.skills-manage",
     "footer.backupMode": "备份模式：每次托管写入前备份",
     "footer.packageFormat": "包格式：.skillpack",
@@ -129,6 +145,13 @@ export const messages: Record<Locale, Record<MessageKey, string>> = {
     "app.subtitle": "Local skills control surface",
     "app.safeMode": "Preview safe mode",
     "app.workflowSettings": "Workflow settings",
+    "regions.appControls": "Application controls",
+    "regions.primaryNavigation": "Primary navigation",
+    "regions.skillsLibrary": "Skills library",
+    "regions.skillDetail": "Skill detail",
+    "regions.skillActions": "Skill actions",
+    "regions.appStatus": "App status",
+    "language.label": "Language",
     "nav.skills": "Skills",
     "nav.import": "Import",
     "nav.packages": "Packages",
@@ -173,6 +196,7 @@ export const messages: Record<Locale, Record<MessageKey, string>> = {
     "targets.enabled": "Managed copy is active",
     "targets.disabled": "Not enabled for this tool",
     "targets.unavailable": "Import to the shared library before enabling",
+    "targets.count": "{count} targets",
     "footer.dataRoot": "Data root: %USERPROFILE%\\.skills-manage",
     "footer.backupMode": "Backup mode: before every managed write",
     "footer.packageFormat": "Package format: .skillpack",
@@ -191,7 +215,7 @@ export function getMessage(locale: Locale, key: string): string {
   return messages[locale][typedKey] ?? messages["en-US"][typedKey] ?? key;
 }
 
-export function formatMessage(locale: Locale, key: string, params: MessageParams = {}): string {
+export function formatMessage(locale: Locale, key: MessageKey, params: MessageParams = {}): string {
   return getMessage(locale, key).replace(/\{(\w+)\}/g, (match, paramKey: string) => {
     const value = params[paramKey];
     return value === undefined ? match : String(value);
