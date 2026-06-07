@@ -8,13 +8,11 @@ import {
   CircleX,
   Download,
   FolderInput,
-  Gauge,
   PackageOpen,
   RefreshCw,
   Search,
   Settings,
   ShieldCheck,
-  SlidersHorizontal,
 } from "lucide-react";
 import "./App.css";
 import { LanguageSwitch } from "./components/LanguageSwitch";
@@ -93,6 +91,11 @@ function App() {
     importState === "importing" ||
     targetActionState === "saving";
   const targetToggleLocked = scanState === "scanning" || importState === "importing" || targetActionState === "saving";
+  const compactSummary = t("status.readyCompact", {
+    total: stats.total,
+    healthy: stats.healthy,
+    warnings: stats.warnings,
+  });
 
   async function loadSkills() {
     setScanState("scanning");
@@ -193,63 +196,42 @@ function App() {
 
   return (
     <main className="app-shell">
-      <header className="topbar" aria-label={t("regions.appControls")}>
-        <div className="window-dots" aria-hidden="true">
-          <span />
-          <span />
-          <span />
+      <aside className="app-rail" aria-label={t("regions.appControls")}>
+        <div className="rail-brand" aria-label={t("app.title")}>
+          <Boxes size={20} strokeWidth={1.9} aria-hidden="true" />
+          <span>SM</span>
         </div>
-        <div className="brand-block">
-          <strong>{t("app.title")}</strong>
-          <span>{t("app.subtitle")}</span>
-        </div>
-        <nav className="module-tabs" aria-label={t("regions.primaryNavigation")}>
+
+        <nav className="rail-nav" aria-label={t("regions.primaryNavigation")}>
           {sections.map((section) => {
             const Icon = section.icon;
             const label = t(section.key);
             return (
               <button
-                className={`module-tab ${section.active ? "active" : ""}`}
+                className={`rail-button ${section.active ? "active" : ""}`}
                 type="button"
                 key={section.key}
                 aria-current={section.active ? "page" : undefined}
                 aria-label={label}
+                title={label}
                 disabled={!section.active}
               >
                 <Icon size={18} strokeWidth={1.8} />
-                <span>{label}</span>
               </button>
             );
           })}
         </nav>
-        <div className="topbar-actions">
-          <LanguageSwitch label={t("language.label")} locale={locale} onLocaleChange={setLocale} />
-          <button className="topbar-icon-button" type="button" aria-label={t("app.workflowSettings")} disabled>
-            <SlidersHorizontal size={18} strokeWidth={1.8} />
-          </button>
-        </div>
-      </header>
 
-      <section className="library-pane" aria-label={t("regions.skillsLibrary")}>
-        <header className="pane-header">
-          <div>
-            <p className="eyebrow">{t("app.subtitle")}</p>
-            <h1>{t("app.title")}</h1>
+        <div className="rail-spacer" aria-hidden="true" />
+      </aside>
+
+      <section className="skills-workspace" aria-label={t("regions.skillsLibrary")}>
+        <header className="command-bar">
+          <div className="command-title">
+            <strong>{t("app.title")}</strong>
+            <span>{compactSummary}</span>
           </div>
-          <span className="mode-pill">
-            <ShieldCheck size={16} strokeWidth={1.8} />
-            {t("app.safeMode")}
-          </span>
-        </header>
 
-        <section className="stat-grid" aria-label={t("regions.librarySummary")}>
-          <SummaryStat label={t("stats.skills")} value={stats.total} />
-          <SummaryStat label={t("stats.healthy")} value={stats.healthy} />
-          <SummaryStat label={t("stats.review")} value={stats.warnings} />
-          <SummaryStat label={t("stats.enabledLinks")} value={stats.enabledTargets} />
-        </section>
-
-        <div className="toolbar">
           <label className="search-field">
             <Search size={17} strokeWidth={1.8} aria-hidden="true" />
             <span className="sr-only">{t("search.label")}</span>
@@ -261,6 +243,7 @@ function App() {
               onChange={(event) => setQuery(event.currentTarget.value)}
             />
           </label>
+
           <button
             className="icon-action"
             type="button"
@@ -270,7 +253,9 @@ function App() {
           >
             <RefreshCw size={18} strokeWidth={1.8} />
           </button>
-        </div>
+
+          <LanguageSwitch label={t("language.label")} locale={locale} onLocaleChange={setLocale} />
+        </header>
 
         <div className={`scan-status ${scanState === "error" ? "error" : ""}`} role="status">
           {scanState === "scanning" ? (
@@ -284,7 +269,7 @@ function App() {
           )}
         </div>
 
-        <section className="skills-list" aria-label={t("regions.discoveredSkills")}>
+        <section className="skills-list scroll-surface" aria-label={t("regions.discoveredSkills")}>
           {filteredSkills.map((skill) => (
             <SkillListItem
               key={skill.id}
@@ -303,41 +288,26 @@ function App() {
             </div>
           ) : null}
         </section>
-      </section>
 
-      <section className="detail-pane" aria-label={t("regions.skillDetail")}>
-        {selectedSkill ? (
-          <SkillDetail
-            skill={selectedSkill}
-            importDisabled={importDisabled}
-            importMessage={importMessage}
-            importState={importState}
-            onImport={() => void importSelectedSkill()}
-            onToggleTarget={(target) => void toggleSkillTarget(target)}
-            targetActionMessage={targetActionMessage}
-            targetActionState={targetActionState}
-            targetActionTargetId={targetActionTargetId}
-            targetToggleLocked={targetToggleLocked}
-            t={t}
-          />
-        ) : null}
+        <section className="skill-drawer" aria-label={t("regions.skillDetail")}>
+          {selectedSkill ? (
+            <SkillDetail
+              skill={selectedSkill}
+              importDisabled={importDisabled}
+              importMessage={importMessage}
+              importState={importState}
+              onImport={() => void importSelectedSkill()}
+              onToggleTarget={(target) => void toggleSkillTarget(target)}
+              targetActionMessage={targetActionMessage}
+              targetActionState={targetActionState}
+              targetActionTargetId={targetActionTargetId}
+              targetToggleLocked={targetToggleLocked}
+              t={t}
+            />
+          ) : null}
+        </section>
       </section>
-
-      <footer className="status-strip" aria-label={t("regions.appStatus")}>
-        <span>{t("footer.dataRoot")}</span>
-        <span>{t("footer.backupMode")}</span>
-        <span>{t("footer.packageFormat")}</span>
-      </footer>
     </main>
-  );
-}
-
-function SummaryStat({ label, value }: { label: string; value: number }) {
-  return (
-    <div className="summary-stat">
-      <span>{label}</span>
-      <strong>{value}</strong>
-    </div>
   );
 }
 
@@ -405,10 +375,10 @@ function SkillDetail({
         : t("actions.importToLibrary");
 
   return (
-    <div className="detail-content">
-      <header className="detail-header">
+    <div className="drawer-content">
+      <header className="drawer-header">
         <div>
-          <p className="eyebrow">{t("detail.eyebrow")}</p>
+          <p className="eyebrow">{t("drawer.selectedSkill")}</p>
           <h2>{skill.name}</h2>
         </div>
         <span className={`health-badge ${skill.health}`}>
@@ -417,14 +387,10 @@ function SkillDetail({
         </span>
       </header>
 
-      <p className="detail-description">{skill.description}</p>
+      <div className="drawer-body scroll-surface">
+        <p className="detail-description">{skill.description}</p>
 
-      <section className="detail-section" aria-labelledby="metadata-heading">
-        <div className="section-title-row">
-          <h3 id="metadata-heading">{t("detail.metadata")}</h3>
-          <Gauge size={17} strokeWidth={1.8} aria-hidden="true" />
-        </div>
-        <dl className="metadata-grid">
+        <dl className="metadata-grid compact-metadata" aria-label={t("detail.metadata")}>
           <div>
             <dt>{t("detail.source")}</dt>
             <dd>{skill.source}</dd>
@@ -438,14 +404,13 @@ function SkillDetail({
             <dd>{skill.supportFiles.join(", ")}</dd>
           </div>
         </dl>
-      </section>
 
-      <section className="detail-section" aria-labelledby="targets-heading">
-        <div className="section-title-row">
+        <div className="drawer-section-title">
           <h3 id="targets-heading">{t("detail.targets")}</h3>
-          <ShieldCheck size={17} strokeWidth={1.8} aria-hidden="true" />
+          <ShieldCheck size={16} strokeWidth={1.8} aria-hidden="true" />
         </div>
-        <div className="target-list">
+
+        <section className="target-list" aria-labelledby="targets-heading">
           {skill.targets.map((target) => {
             const canToggle = skill.source === "Shared Library" && toggleableTargetIds.has(target.id) && !targetToggleLocked;
             const actionVerb = target.enabled ? t("actions.disable") : t("actions.enable");
@@ -475,8 +440,8 @@ function SkillDetail({
               </div>
             );
           })}
-        </div>
-      </section>
+        </section>
+      </div>
 
       <section className="action-bar" aria-label={t("regions.skillActions")}>
         <button

@@ -37,12 +37,26 @@ function contrastRatio(foreground, background) {
 }
 
 describe("App stylesheet accessibility contracts", () => {
-  it("keeps compact toolbar controls at touch-safe sizes", () => {
-    expect(cssBlock(/\.module-tab\s*\{([^}]*)\}/s)).toContain("min-height: 44px");
+  it("keeps the app as a fixed desktop shell instead of a scrolling page", () => {
+    expect(cssBlock(/body\s*\{([^}]*)\}/s)).toContain("overflow: hidden");
+    expect(cssBlock(/\.app-shell\s*\{([^}]*)\}/s)).toContain("height: 100vh");
+    expect(cssBlock(/\.app-shell\s*\{([^}]*)\}/s)).toContain("overflow: hidden");
+    expect(cssBlock(/\.app-shell\s*\{([^}]*)\}/s)).toContain("grid-template-columns: 64px minmax(0, 1fr)");
+  });
+
+  it("hides scrollbars while keeping internal scroll surfaces wheelable", () => {
+    expect(cssBlock(/\.scroll-surface\s*\{([^}]*)\}/s)).toContain("overflow-y: auto");
+    expect(cssBlock(/\.scroll-surface\s*\{([^}]*)\}/s)).toContain("scrollbar-width: none");
+    expect(cssBlock(/\.scroll-surface::-webkit-scrollbar\s*\{([^}]*)\}/s)).toContain("display: none");
+  });
+
+  it("keeps compact exe controls at touch-safe sizes", () => {
+    expect(cssBlock(/\.rail-button\s*\{([^}]*)\}/s)).toContain("width: 44px");
+    expect(cssBlock(/\.rail-button\s*\{([^}]*)\}/s)).toContain("min-height: 44px");
     expect(cssBlock(/\.language-switch\s*\{([^}]*)\}/s)).toContain("min-height: 44px");
     expect(cssBlock(/\.language-switch button\s*\{([^}]*)\}/s)).toContain("min-height: 44px");
-    expect(cssBlock(/\.topbar-icon-button,\s*\.icon-action\s*\{([^}]*)\}/s)).toContain("width: 44px");
-    expect(cssBlock(/\.topbar-icon-button,\s*\.icon-action\s*\{([^}]*)\}/s)).toContain("min-height: 44px");
+    expect(cssBlock(/\.icon-action\s*\{([^}]*)\}/s)).toContain("width: 44px");
+    expect(cssBlock(/\.icon-action\s*\{([^}]*)\}/s)).toContain("min-height: 44px");
   });
 
   it("keeps keyboard focus visible for the search field", () => {

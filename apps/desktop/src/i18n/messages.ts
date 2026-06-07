@@ -53,12 +53,14 @@ export type MessageKey =
   | "status.scan.error"
   | "status.scan.fallback"
   | "status.scan.ready"
+  | "status.readyCompact"
   | "status.empty.title"
   | "status.empty.body"
   | "health.healthy"
   | "health.warning"
   | "health.broken"
   | "detail.eyebrow"
+  | "drawer.selectedSkill"
   | "detail.metadata"
   | "detail.source"
   | "detail.path"
@@ -122,12 +124,14 @@ export const messages: Record<Locale, Record<MessageKey, string>> = {
     "status.scan.error": "扫描不可用：{error}",
     "status.scan.fallback": "未找到本地技能，正在显示示例记录。",
     "status.scan.ready": "扫描完成，正在显示本地技能。",
+    "status.readyCompact": "{total} 个技能 · {healthy} 健康 · {warnings} 待检查",
     "status.empty.title": "没有匹配的技能。",
     "status.empty.body": "试试工具名、文件夹或支持文件。",
     "health.healthy": "健康",
     "health.warning": "需检查",
     "health.broken": "损坏",
     "detail.eyebrow": "已选择技能",
+    "drawer.selectedSkill": "已选择技能",
     "detail.metadata": "元数据",
     "detail.source": "来源",
     "detail.path": "路径",
@@ -188,12 +192,14 @@ export const messages: Record<Locale, Record<MessageKey, string>> = {
     "status.scan.error": "Scan unavailable: {error}",
     "status.scan.fallback": "No local skills found. Showing sample records.",
     "status.scan.ready": "Scan complete. Showing local skills.",
+    "status.readyCompact": "{total} skills · {healthy} healthy · {warnings} review",
     "status.empty.title": "No skills match this search.",
     "status.empty.body": "Try a tool name, folder, or support file.",
     "health.healthy": "Healthy",
     "health.warning": "Needs review",
     "health.broken": "Broken",
     "detail.eyebrow": "Selected skill",
+    "drawer.selectedSkill": "Selected skill",
     "detail.metadata": "Metadata",
     "detail.source": "Source",
     "detail.path": "Path",

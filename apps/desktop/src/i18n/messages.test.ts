@@ -35,6 +35,14 @@ describe("messages", () => {
     expect(getMessage("zh-CN", "missing.key")).toBe("missing.key");
   });
 
+  it("includes compact drawer and scan summary messages", () => {
+    expect(getMessage("zh-CN", "drawer.selectedSkill")).toBe("已选择技能");
+    expect(getMessage("en-US", "drawer.selectedSkill")).toBe("Selected skill");
+    expect(
+      getMessage("zh-CN", "status.readyCompact").replace("{total}", "4").replace("{healthy}", "2").replace("{warnings}", "1"),
+    ).toBe("4 个技能 · 2 健康 · 1 待检查");
+  });
+
   it("interpolates named parameters", () => {
     expect(
       formatMessage("zh-CN", "actions.enablingSkillForTarget", {

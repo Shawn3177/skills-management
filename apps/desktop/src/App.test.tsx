@@ -2,6 +2,7 @@ import "@testing-library/jest-dom/vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import App from "./App";
+import { messages } from "./i18n/messages";
 
 const invokeMock = vi.fn();
 
@@ -53,14 +54,14 @@ describe("App", () => {
 
     render(<App />);
 
-    expect(screen.getByRole("banner", { name: "应用控制" })).toBeInTheDocument();
-    expect(screen.getByRole("navigation", { name: "主导航" })).toBeInTheDocument();
-    expect(screen.getByRole("region", { name: "库概览" })).toBeInTheDocument();
-    expect(screen.getByRole("region", { name: "已发现技能" })).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: /Skills Manage/i })).toBeInTheDocument();
-    expect(screen.getByRole("searchbox", { name: /搜索技能/i })).toBeInTheDocument();
-    expect(screen.getByText("预览安全模式")).toBeInTheDocument();
-    expect(screen.getByText("正在扫描本地文件夹")).toBeInTheDocument();
+    expect(screen.getByRole("complementary", { name: messages["zh-CN"]["regions.appControls"] })).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: messages["zh-CN"]["regions.discoveredSkills"] })).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: messages["zh-CN"]["regions.skillDetail"] })).toBeInTheDocument();
+    expect(screen.getByRole("searchbox", { name: messages["zh-CN"]["search.label"] })).toBeInTheDocument();
+    expect(screen.getByText(messages["zh-CN"]["drawer.selectedSkill"])).toBeInTheDocument();
+    expect(screen.getByText(messages["zh-CN"]["status.scan.scanning"])).toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: messages["zh-CN"]["regions.librarySummary"] })).not.toBeInTheDocument();
+    expect(screen.queryByText(messages["zh-CN"]["footer.dataRoot"])).not.toBeInTheDocument();
 
     await waitFor(() => expect(screen.getAllByText("local-scan-skill").length).toBeGreaterThan(0));
     expect(invokeMock).toHaveBeenCalledWith("scan_skills");
@@ -75,7 +76,7 @@ describe("App", () => {
     fireEvent.click(screen.getByRole("button", { name: "EN" }));
 
     expect(screen.getByRole("searchbox", { name: /Search skills/i })).toBeInTheDocument();
-    expect(screen.getByText("Preview safe mode")).toBeInTheDocument();
+    expect(screen.getByText("Selected skill")).toBeInTheDocument();
     expect(screen.getAllByText("local-scan-skill").length).toBeGreaterThan(0);
     expect(localStorage.getItem("skills-manage.locale")).toBe("en-US");
   });
