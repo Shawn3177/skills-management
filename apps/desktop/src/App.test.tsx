@@ -53,6 +53,8 @@ describe("App", () => {
 
     render(<App />);
 
+    expect(screen.getByRole("banner", { name: "应用控制" })).toBeInTheDocument();
+    expect(screen.getByRole("navigation", { name: "主导航" })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: /Skills Manage/i })).toBeInTheDocument();
     expect(screen.getByRole("searchbox", { name: /搜索技能/i })).toBeInTheDocument();
     expect(screen.getByText("预览安全模式")).toBeInTheDocument();
