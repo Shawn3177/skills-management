@@ -22,8 +22,8 @@
   --line-strong: #c7d0d7;
   --text: #182026;
   --muted: #66727c;
-  --accent: #2f7df6;
-  --accent-strong: #1f63d5;
+  --accent: #1555b8;
+  --accent-strong: #0f3f8d;
   --success: #168251;
   --warning: #a15d00;
   --danger: #b42335;
@@ -52,7 +52,7 @@ button {
 
 button:focus-visible,
 input:focus-visible {
-  outline: 3px solid rgba(47, 125, 246, 0.28);
+  outline: 3px solid rgba(21, 85, 184, 0.28);
   outline-offset: 2px;
 }
 
@@ -150,7 +150,7 @@ button:disabled {
   display: inline-flex;
   align-items: center;
   gap: 7px;
-  min-height: 38px;
+  min-height: 44px;
   padding: 0 14px;
   border: 0;
   border-radius: 7px;
@@ -173,13 +173,14 @@ button:disabled {
 
 .topbar-actions {
   display: inline-flex;
+  align-items: center;
   justify-content: end;
   gap: 10px;
 }
 
 .language-switch {
   display: inline-flex;
-  min-height: 38px;
+  min-height: 44px;
   padding: 4px;
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -187,7 +188,7 @@ button:disabled {
 }
 
 .language-switch button {
-  min-height: 30px;
+  min-height: 44px;
   padding: 0 10px;
   border: 0;
   border-radius: 6px;
@@ -205,8 +206,8 @@ button:disabled {
 .topbar-icon-button,
 .icon-action {
   display: grid;
-  width: 38px;
-  min-height: 38px;
+  width: 44px;
+  min-height: 44px;
   place-items: center;
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -321,7 +322,7 @@ h3 {
 
 .toolbar {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 38px;
+  grid-template-columns: minmax(0, 1fr) 44px;
   gap: 8px;
 }
 
@@ -329,12 +330,18 @@ h3 {
   position: relative;
   display: flex;
   align-items: center;
-  min-height: 38px;
+  min-height: 44px;
   padding: 0 12px;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: var(--surface-strong);
   color: var(--muted);
+}
+
+.search-field:focus-within {
+  border-color: rgba(21, 85, 184, 0.44);
+  outline: 3px solid rgba(21, 85, 184, 0.2);
+  outline-offset: 2px;
 }
 
 .search-field input {

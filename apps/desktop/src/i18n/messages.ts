@@ -17,6 +17,8 @@ export type MessageKey =
   | "regions.appControls"
   | "regions.primaryNavigation"
   | "regions.skillsLibrary"
+  | "regions.librarySummary"
+  | "regions.discoveredSkills"
   | "regions.skillDetail"
   | "regions.skillActions"
   | "regions.appStatus"
@@ -84,6 +86,8 @@ export const messages: Record<Locale, Record<MessageKey, string>> = {
     "regions.appControls": "应用控制",
     "regions.primaryNavigation": "主导航",
     "regions.skillsLibrary": "技能库",
+    "regions.librarySummary": "库概览",
+    "regions.discoveredSkills": "已发现技能",
     "regions.skillDetail": "技能详情",
     "regions.skillActions": "技能操作",
     "regions.appStatus": "应用状态",
@@ -148,6 +152,8 @@ export const messages: Record<Locale, Record<MessageKey, string>> = {
     "regions.appControls": "Application controls",
     "regions.primaryNavigation": "Primary navigation",
     "regions.skillsLibrary": "Skills library",
+    "regions.librarySummary": "Library summary",
+    "regions.discoveredSkills": "Discovered skills",
     "regions.skillDetail": "Skill detail",
     "regions.skillActions": "Skill actions",
     "regions.appStatus": "App status",

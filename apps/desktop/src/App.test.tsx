@@ -55,6 +55,8 @@ describe("App", () => {
 
     expect(screen.getByRole("banner", { name: "应用控制" })).toBeInTheDocument();
     expect(screen.getByRole("navigation", { name: "主导航" })).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "库概览" })).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "已发现技能" })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: /Skills Manage/i })).toBeInTheDocument();
     expect(screen.getByRole("searchbox", { name: /搜索技能/i })).toBeInTheDocument();
     expect(screen.getByText("预览安全模式")).toBeInTheDocument();
@@ -111,6 +113,36 @@ describe("App", () => {
     );
     await waitFor(() => expect(screen.getByText(/已将 local-scan-skill 导入共享库/i)).toBeInTheDocument());
     expect(screen.getAllByText("Shared Library").length).toBeGreaterThan(0);
+  });
+
+  it("keeps already-managed import success messages localized", async () => {
+    let scanCount = 0;
+    invokeMock.mockImplementation((command: string) => {
+      if (command === "scan_skills") {
+        scanCount += 1;
+        return Promise.resolve(scanCount === 1 ? [scannedCodexSkill] : [sharedLibrarySkill]);
+      }
+
+      if (command === "import_skill_to_library") {
+        return Promise.resolve({
+          imported: false,
+          alreadyManaged: true,
+          skillName: "local-scan-skill",
+          libraryPath: "C:/Users/example/.skills-manage/library/local-scan-skill",
+          message: "Skill is already in the shared library.",
+        });
+      }
+
+      return Promise.reject(new Error(`Unexpected command: ${command}`));
+    });
+
+    render(<App />);
+    await waitFor(() => expect(screen.getAllByText("local-scan-skill").length).toBeGreaterThan(0));
+
+    fireEvent.click(screen.getByRole("button", { name: /导入共享库/i }));
+
+    await waitFor(() => expect(screen.getByText("local-scan-skill 已在共享库中。")).toBeInTheDocument());
+    expect(screen.queryByText("Skill is already in the shared library.")).not.toBeInTheDocument();
   });
 
   it("enables the selected shared-library skill for a target and refreshes the scan", async () => {

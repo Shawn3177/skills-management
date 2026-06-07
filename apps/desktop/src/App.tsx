@@ -170,7 +170,9 @@ function App() {
       setImportMessage(
         result.imported
           ? t("actions.importedSkill", { skillName: result.skillName })
-          : result.message || t("actions.skillAlreadyManaged", { skillName: result.skillName }),
+          : result.alreadyManaged
+            ? t("actions.skillAlreadyManaged", { skillName: result.skillName })
+            : result.message || t("actions.skillAlreadyManaged", { skillName: result.skillName }),
       );
       await loadSkills();
     } catch (error) {
@@ -240,12 +242,12 @@ function App() {
           </span>
         </header>
 
-        <div className="stat-grid" aria-label="Library summary">
+        <section className="stat-grid" aria-label={t("regions.librarySummary")}>
           <SummaryStat label={t("stats.skills")} value={stats.total} />
           <SummaryStat label={t("stats.healthy")} value={stats.healthy} />
           <SummaryStat label={t("stats.review")} value={stats.warnings} />
           <SummaryStat label={t("stats.enabledLinks")} value={stats.enabledTargets} />
-        </div>
+        </section>
 
         <div className="toolbar">
           <label className="search-field">
@@ -282,7 +284,7 @@ function App() {
           )}
         </div>
 
-        <div className="skills-list" aria-label="Discovered skills">
+        <section className="skills-list" aria-label={t("regions.discoveredSkills")}>
           {filteredSkills.map((skill) => (
             <SkillListItem
               key={skill.id}
@@ -300,7 +302,7 @@ function App() {
               <span>{t("status.empty.body")}</span>
             </div>
           ) : null}
-        </div>
+        </section>
       </section>
 
       <section className="detail-pane" aria-label={t("regions.skillDetail")}>
