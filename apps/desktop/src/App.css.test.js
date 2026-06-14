@@ -57,6 +57,7 @@ describe("App stylesheet accessibility contracts", () => {
     expect(cssBlock(/\.language-switch button\s*\{([^}]*)\}/s)).toContain("min-height: 44px");
     expect(cssBlock(/\.icon-action\s*\{([^}]*)\}/s)).toContain("width: 44px");
     expect(cssBlock(/\.icon-action\s*\{([^}]*)\}/s)).toContain("min-height: 44px");
+    expect(cssBlock(/\.bulk-import-action\s*\{([^}]*)\}/s)).toContain("min-height: 44px");
   });
 
   it("keeps keyboard focus visible for the search field", () => {

@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { defaultLocale, formatMessage, isLocale, type Locale, type MessageKey, type MessageParams } from "./messages";
 
 export const localeStorageKey = "skills-manage.locale";
@@ -14,6 +14,12 @@ export function writeStoredLocale(locale: Locale, storage: Storage = window.loca
 
 export function useLocale() {
   const [locale, setLocaleState] = useState<Locale>(() => readStoredLocale());
+
+  useEffect(() => {
+    if (typeof document !== "undefined") {
+      document.documentElement.lang = locale;
+    }
+  }, [locale]);
 
   const setLocale = useCallback((nextLocale: Locale) => {
     setLocaleState(nextLocale);

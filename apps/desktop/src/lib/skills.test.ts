@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { filterSkills, getSkillStats, type SkillRecord } from "./skills";
+import { filterSkills, getSkillStats, mergeSameNamedSkills, type SkillRecord } from "./skills";
 
 const records: SkillRecord[] = [
   {
@@ -47,5 +47,43 @@ describe("getSkillStats", () => {
       warnings: 1,
       enabledTargets: 1,
     });
+  });
+});
+
+describe("mergeSameNamedSkills", () => {
+  it("merges same-named records when they describe the same skill", () => {
+    const sharedRecord: SkillRecord = {
+      ...records[0],
+      id: "codex-style-shared",
+      source: "Shared Library",
+      sourcePath: "C:/Users/example/.skills-manage/library/codex-style",
+      targets: records[0].targets.map((target) => ({ ...target, enabled: false })),
+    };
+
+    const merged = mergeSameNamedSkills([records[0], sharedRecord]);
+
+    expect(merged).toHaveLength(1);
+    expect(merged[0].name).toBe("codex-style");
+    expect(merged[0].source).toBe("Codex, Shared Library");
+    expect(merged[0].sourcePath).toBe(sharedRecord.sourcePath);
+    expect(merged[0].targets.find((target) => target.id === "codex")?.enabled).toBe(true);
+  });
+
+  it("keeps same-named records separate when descriptions show different skills", () => {
+    const unrelatedRecord: SkillRecord = {
+      ...records[0],
+      id: "codex-style-unrelated",
+      description: "A different skill that happens to share the folder name.",
+      source: "Claude Code",
+      sourcePath: "C:/Users/example/.claude/skills/codex-style",
+    };
+
+    const merged = mergeSameNamedSkills([records[0], unrelatedRecord]);
+
+    expect(merged).toHaveLength(2);
+    expect(merged.map((record) => record.description)).toEqual([
+      records[0].description,
+      unrelatedRecord.description,
+    ]);
   });
 });
