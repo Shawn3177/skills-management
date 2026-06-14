@@ -13,14 +13,15 @@
     "windows": [
       {
         "title": "Skills Manage",
-        "width": 1180,
-        "height": 760,
-        "minWidth": 960,
-        "minHeight": 640
+        "width": 920,
+        "height": 640,
+        "minWidth": 840,
+        "minHeight": 580,
+        "resizable": true
       }
     ],
     "security": {
-      "csp": null
+      "csp": "default-src 'self'; connect-src ipc: http://ipc.localhost; img-src 'self' asset: https://asset.localhost; style-src 'self' 'unsafe-inline'; script-src 'self'"
     }
   },
   "bundle": {

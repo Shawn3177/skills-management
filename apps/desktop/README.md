@@ -10,6 +10,8 @@ npm run dev
 npm run tauri dev
 npm test -- --run
 npm run build
+npm run tauri build
+npm run package:portable
 ```
 
 Rust backend checks:

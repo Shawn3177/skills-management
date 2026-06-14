@@ -96,6 +96,27 @@ fn enable_target_copy(
     destination: &Path,
     skill_name: &str,
 ) -> Result<TargetToggleResult, String> {
+    enable_target_copy_with_marker_writer(
+        source_canonical,
+        source_path,
+        target,
+        destination,
+        skill_name,
+        write_marker,
+    )
+}
+
+fn enable_target_copy_with_marker_writer<F>(
+    source_canonical: &Path,
+    source_path: &Path,
+    target: &TargetProfile,
+    destination: &Path,
+    skill_name: &str,
+    marker_writer: F,
+) -> Result<TargetToggleResult, String>
+where
+    F: Fn(&Path, &Path, &TargetProfile) -> Result<(), String>,
+{
     fs::create_dir_all(&target.root)
         .map_err(|error| format!("Could not create target root: {error}"))?;
 
@@ -118,8 +139,53 @@ fn enable_target_copy(
         ));
     }
 
-    copy_skill_dir(source_path, destination)?;
-    write_marker(destination, source_canonical, target)?;
+    let staging_destination = unique_staging_path(&target.root, skill_name)?;
+
+    if let Err(error) = copy_skill_dir(source_path, &staging_destination) {
+        return Err(cleanup_staging_after_failure(&staging_destination, error));
+    }
+
+    if let Err(error) = marker_writer(&staging_destination, source_canonical, target) {
+        return Err(cleanup_staging_after_failure(&staging_destination, error));
+    }
+
+    if destination.exists() {
+        let cleanup_result = cleanup_staging(&staging_destination);
+
+        if marker_matches(destination, source_canonical, target.id) {
+            if cleanup_result.is_ok() {
+                return Ok(TargetToggleResult {
+                    target_id: target.id.to_string(),
+                    target_name: target.name.to_string(),
+                    skill_name: skill_name.to_string(),
+                    enabled: true,
+                    changed: false,
+                    target_path: destination.display().to_string(),
+                    message: format!("{skill_name} is already enabled for {}.", target.name),
+                });
+            }
+
+            return Err(cleanup_result.unwrap_err());
+        }
+
+        let error = format!(
+            "Target folder already exists and is not managed by Skills Manage: {}",
+            destination.display()
+        );
+
+        if let Err(cleanup_error) = cleanup_result {
+            return Err(format!("{error} {cleanup_error}"));
+        }
+
+        return Err(error);
+    }
+
+    if let Err(error) = fs::rename(&staging_destination, destination) {
+        return Err(cleanup_staging_after_failure(
+            &staging_destination,
+            format!("Could not move staged target folder into place: {error}"),
+        ));
+    }
 
     Ok(TargetToggleResult {
         target_id: target.id.to_string(),
@@ -311,6 +377,46 @@ fn unique_trash_path(
     unreachable!("unbounded trash index should always find an available folder")
 }
 
+fn unique_staging_path(target_root: &Path, skill_name: &str) -> Result<PathBuf, String> {
+    for copy_index in 0.. {
+        let suffix = if copy_index == 0 {
+            String::new()
+        } else {
+            format!("-{copy_index}")
+        };
+        let candidate = target_root.join(format!(
+            ".skills-manage-staging-{skill_name}-{}{suffix}",
+            unix_ms()
+        ));
+
+        if !candidate.exists() {
+            return Ok(candidate);
+        }
+    }
+
+    unreachable!("unbounded staging index should always find an available folder")
+}
+
+fn cleanup_staging_after_failure(staging_destination: &Path, error: String) -> String {
+    match cleanup_staging(staging_destination) {
+        Ok(()) => error,
+        Err(cleanup_error) => format!("{error} {cleanup_error}"),
+    }
+}
+
+fn cleanup_staging(staging_destination: &Path) -> Result<(), String> {
+    if !staging_destination.exists() {
+        return Ok(());
+    }
+
+    fs::remove_dir_all(staging_destination).map_err(|cleanup_error| {
+        format!(
+            "Cleanup failed. Also could not remove staged target folder {}: {cleanup_error}",
+            staging_destination.display()
+        )
+    })
+}
+
 fn skill_folder_name(source_path: &Path) -> String {
     source_path
         .file_name()
@@ -443,6 +549,33 @@ mod tests {
             fs::read_to_string(target_root.join("conflict-skill").join("SKILL.md")).unwrap(),
             "# User folder\n"
         );
+
+        fs::remove_dir_all(data_root).unwrap();
+        fs::remove_dir_all(target_root).unwrap();
+    }
+
+    #[test]
+    fn enable_cleans_staged_copy_when_marker_write_fails() {
+        let data_root = unique_temp_dir("data-root-target-marker-failure");
+        let library_skill = create_library_skill(&data_root, "copy-me");
+        let target_root = unique_temp_dir("codex-target-marker-failure");
+        let target = target_profile_with_root("codex", &target_root).unwrap();
+        let source_canonical = library_skill.canonicalize().unwrap();
+        let destination = target_root.join("copy-me");
+
+        let error = enable_target_copy_with_marker_writer(
+            &source_canonical,
+            &library_skill,
+            &target,
+            &destination,
+            "copy-me",
+            |_, _, _| Err("marker write failed".to_string()),
+        )
+        .unwrap_err();
+
+        assert!(error.contains("marker write failed"));
+        assert!(!destination.exists());
+        assert_eq!(fs::read_dir(&target_root).unwrap().count(), 0);
 
         fs::remove_dir_all(data_root).unwrap();
         fs::remove_dir_all(target_root).unwrap();
