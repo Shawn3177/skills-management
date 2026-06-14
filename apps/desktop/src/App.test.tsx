@@ -254,6 +254,43 @@ describe("App", () => {
     );
   });
 
+  it("surfaces the failed count when a bulk enable partially fails", async () => {
+    invokeMock.mockImplementation((command: string, args?: { sourcePath?: string; targetId?: string }) => {
+      if (command === "scan_skills") {
+        return Promise.resolve([sharedLibrarySkill, secondSharedLibrarySkill]);
+      }
+
+      if (command === "set_skill_target_enabled") {
+        if (args?.sourcePath?.includes("second-local-skill")) {
+          return Promise.reject(new Error("EACCES: permission denied"));
+        }
+
+        return Promise.resolve({
+          targetId: args?.targetId ?? "claude-code",
+          targetName: "Claude Code",
+          skillName: "local-scan-skill",
+          enabled: true,
+          changed: true,
+          targetPath: "C:/Users/example/.claude/skills/local-scan-skill",
+          message: "ok",
+        });
+      }
+
+      return Promise.reject(new Error(`Unexpected command: ${command}`));
+    });
+
+    render(<App />);
+    await waitFor(() => expect(screen.getAllByText("local-scan-skill").length).toBeGreaterThan(0));
+    fireEvent.click(screen.getByRole("button", { name: "EN" }));
+    fireEvent.click(screen.getByRole("button", { name: "Imported" }));
+
+    fireEvent.click(screen.getByRole("button", { name: "Enable all for Claude Code" }));
+
+    await waitFor(() =>
+      expect(screen.getByText("Enabled 1 skills for Claude Code, 1 failed.")).toBeInTheDocument(),
+    );
+  });
+
   it("disables the bulk enable button when every imported skill is already on for a tool", async () => {
     const codexOn = {
       ...sharedLibrarySkill,

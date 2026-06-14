@@ -75,7 +75,11 @@ type TargetToggleResult = {
 
 type TFunction = ReturnType<typeof useLocale>["t"];
 
-const toggleableTargetIds = new Set(["codex", "claude-code"]);
+const toggleableTargets = [
+  { id: "codex", name: "Codex" },
+  { id: "claude-code", name: "Claude Code" },
+];
+const toggleableTargetIds = new Set(toggleableTargets.map((target) => target.id));
 
 function isTauriBridgeUnavailable(error: unknown) {
   const message = (error instanceof Error ? error.message : String(error ?? "")).toLowerCase();
@@ -270,13 +274,21 @@ function App() {
       }
     }
 
+    const failed = candidates.length - completed;
+
     if (completed > 0) {
-      setTargetActionState(lastError ? "error" : "success");
+      setTargetActionState(failed > 0 ? "error" : "success");
       setTargetActionMessage(
-        t(enabled ? "actions.enabledAllForTarget" : "actions.disabledAllForTarget", {
-          count: completed,
-          targetName,
-        }),
+        failed > 0
+          ? t(enabled ? "actions.enabledAllForTargetPartial" : "actions.disabledAllForTargetPartial", {
+              count: completed,
+              failed,
+              targetName,
+            })
+          : t(enabled ? "actions.enabledAllForTarget" : "actions.disabledAllForTarget", {
+              count: completed,
+              targetName,
+            }),
       );
     } else {
       setTargetActionState("error");
@@ -363,9 +375,15 @@ function App() {
       }
     }
 
+    const failedCount = candidates.length - completedCount;
+
     if (completedCount > 0) {
-      setImportState(lastError ? "error" : "success");
-      setImportMessage(t("actions.importedAllSkills", { count: completedCount }));
+      setImportState(failedCount > 0 ? "error" : "success");
+      setImportMessage(
+        failedCount > 0
+          ? t("actions.importedAllSkillsPartial", { count: completedCount, failed: failedCount })
+          : t("actions.importedAllSkills", { count: completedCount }),
+      );
     } else {
       setImportState("error");
       setImportMessage(describeImportError(lastError, t));
@@ -621,10 +639,7 @@ function App() {
           >
             {importedSkills.length > 0 ? (
               <div className="bulk-target-bar" aria-label={t("workspace.import.bulkActions")}>
-                {[
-                  { id: "codex", name: "Codex" },
-                  { id: "claude-code", name: "Claude Code" },
-                ].map((tool) => {
+                {toggleableTargets.map((tool) => {
                   const total = importedSkills.length;
                   const enabledCount = importedSkills.filter(
                     (skill) => skill.targets.find((entry) => entry.id === tool.id)?.enabled,

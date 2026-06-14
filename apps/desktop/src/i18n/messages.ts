@@ -51,6 +51,7 @@ export type MessageKey =
   | "actions.importedSkill"
   | "actions.importingAllSkills"
   | "actions.importedAllSkills"
+  | "actions.importedAllSkillsPartial"
   | "actions.importAllEmpty"
   | "actions.enableAll"
   | "actions.disableAll"
@@ -58,6 +59,8 @@ export type MessageKey =
   | "actions.disableAllForTarget"
   | "actions.enabledAllForTarget"
   | "actions.disabledAllForTarget"
+  | "actions.enabledAllForTargetPartial"
+  | "actions.disabledAllForTargetPartial"
   | "actions.bulkTargetNoChange"
   | "actions.skillAlreadyManaged"
   | "status.scan.scanning"
@@ -148,6 +151,7 @@ export const messages: Record<Locale, Record<MessageKey, string>> = {
     "actions.importedSkill": "已将 {skillName} 导入共享库。",
     "actions.importingAllSkills": "正在导入 {current}/{total}：{skillName}。",
     "actions.importedAllSkills": "已导入 {count} 个技能到共享库。",
+    "actions.importedAllSkillsPartial": "已导入 {count} 个技能到共享库，{failed} 个失败。",
     "actions.importAllEmpty": "没有需要导入的技能。",
     "actions.enableAll": "全部启用",
     "actions.disableAll": "全部停用",
@@ -155,6 +159,8 @@ export const messages: Record<Locale, Record<MessageKey, string>> = {
     "actions.disableAllForTarget": "为 {targetName} 全部停用",
     "actions.enabledAllForTarget": "已为 {targetName} 启用 {count} 个技能。",
     "actions.disabledAllForTarget": "已为 {targetName} 停用 {count} 个技能。",
+    "actions.enabledAllForTargetPartial": "已为 {targetName} 启用 {count} 个技能，{failed} 个失败。",
+    "actions.disabledAllForTargetPartial": "已为 {targetName} 停用 {count} 个技能，{failed} 个失败。",
     "actions.bulkTargetNoChange": "{targetName} 无需更改。",
     "actions.skillAlreadyManaged": "{skillName} 已在共享库中。",
     "status.scan.scanning": "正在扫描本地文件夹",
@@ -242,6 +248,7 @@ export const messages: Record<Locale, Record<MessageKey, string>> = {
     "actions.importedSkill": "Imported {skillName} into the shared library.",
     "actions.importingAllSkills": "Importing {current}/{total}: {skillName}.",
     "actions.importedAllSkills": "Imported {count} skills into the shared library.",
+    "actions.importedAllSkillsPartial": "Imported {count} skills into the shared library, {failed} failed.",
     "actions.importAllEmpty": "No skills need importing.",
     "actions.enableAll": "Enable all",
     "actions.disableAll": "Disable all",
@@ -249,6 +256,8 @@ export const messages: Record<Locale, Record<MessageKey, string>> = {
     "actions.disableAllForTarget": "Disable all for {targetName}",
     "actions.enabledAllForTarget": "Enabled {count} skills for {targetName}.",
     "actions.disabledAllForTarget": "Disabled {count} skills for {targetName}.",
+    "actions.enabledAllForTargetPartial": "Enabled {count} skills for {targetName}, {failed} failed.",
+    "actions.disabledAllForTargetPartial": "Disabled {count} skills for {targetName}, {failed} failed.",
     "actions.bulkTargetNoChange": "Nothing to change for {targetName}.",
     "actions.skillAlreadyManaged": "{skillName} is already in the shared library.",
     "status.scan.scanning": "Scanning local folders",
