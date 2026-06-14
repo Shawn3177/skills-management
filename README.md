@@ -30,6 +30,17 @@ npm test -- --run
 npm run build
 ```
 
+Windows packaging:
+
+```powershell
+cd apps/desktop
+npm run tauri build
+npm run package:portable
+```
+
+The Tauri build creates installer bundles under `apps/desktop/src-tauri/target/release/bundle/`.
+The portable script creates a ZIP under `apps/desktop/src-tauri/target/release/bundle/portable/`.
+
 Rust checks:
 
 ```powershell
