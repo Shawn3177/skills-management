@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { open, save } from "@tauri-apps/plugin-dialog";
 import {
   Archive,
   ArrowLeft,
@@ -424,13 +425,87 @@ function App() {
     setUtilityMessage(t("actions.repairPreview", { skillName: selectedSkill.name }));
   }
 
-  function showExportPreview() {
-    if (!selectedSkill) {
+  async function exportSkills(skills: SkillRecord[], defaultName: string) {
+    if (skills.length === 0) {
+      setImportMessage("");
+      setUtilityMessage(t("actions.exportLibraryEmpty"));
+      return;
+    }
+
+    let destination: string | null = null;
+    try {
+      destination = await save({
+        defaultPath: defaultName,
+        filters: [{ name: "Skillpack", extensions: ["skillpack"] }],
+      });
+    } catch (error) {
+      console.error("save dialog failed", error);
+    }
+    if (!destination) {
       return;
     }
 
     setImportMessage("");
-    setUtilityMessage(t("actions.exportPreview", { skillName: selectedSkill.name }));
+    setUtilityMessage(t("actions.exportingSkillpack"));
+    try {
+      const result = await invoke<{ skillCount: number }>("export_skillpack", {
+        sources: skills.map((skill) => ({
+          sourcePath: skill.sourcePath,
+          name: skill.name,
+          targets: skill.targets.map((target) => ({ id: target.id, enabled: target.enabled })),
+        })),
+        destination,
+      });
+      setUtilityMessage(t("actions.exportedSkillpack", { count: result.skillCount }));
+    } catch (error) {
+      console.error("export_skillpack failed", error);
+      setUtilityMessage(
+        isTauriBridgeUnavailable(error) ? t("errors.bridgeAction") : t("errors.exportFallback"),
+      );
+    }
+  }
+
+  function exportSelectedSkill() {
+    if (!selectedSkill) {
+      return;
+    }
+    void exportSkills([selectedSkill], `${selectedSkill.name}.skillpack`);
+  }
+
+  function exportLibrary() {
+    void exportSkills(
+      groupedSkills.filter((skill) => hasSource(skill, "Shared Library")),
+      "skills-library.skillpack",
+    );
+  }
+
+  async function importSkillpack() {
+    let selection: string | string[] | null = null;
+    try {
+      selection = await open({
+        multiple: false,
+        filters: [{ name: "Skillpack", extensions: ["skillpack"] }],
+      });
+    } catch (error) {
+      console.error("open dialog failed", error);
+    }
+    const packagePath = Array.isArray(selection) ? selection[0] : selection;
+    if (!packagePath) {
+      return;
+    }
+
+    setImportMessage("");
+    setUtilityMessage(t("actions.importingSkillpack"));
+    try {
+      const result = await invoke<{ imported: number }>("import_skillpack", { packagePath });
+      setUtilityMessage(t("actions.importedSkillpack", { count: result.imported }));
+      await loadSkills();
+    } catch (error) {
+      console.error("import_skillpack failed", error);
+      setUtilityMessage(
+        isTauriBridgeUnavailable(error) ? t("errors.bridgeAction") : t("errors.importPackFallback"),
+      );
+    }
   }
 
   function showTargetBlocked(target: { id: string; name: string }) {
@@ -591,7 +666,7 @@ function App() {
                 importDisabled={importDisabled}
                 importMessage={importMessage}
                 importState={importState}
-                onExport={showExportPreview}
+                onExport={exportSelectedSkill}
                 onImport={() => void importSelectedSkill()}
                 onRepair={showRepairPreview}
                 onTargetBlocked={showTargetBlocked}
@@ -731,11 +806,11 @@ function App() {
             body={t("workspace.packages.body")}
           >
             <div className="workspace-actions">
-              <button type="button" onClick={showExportPreview}>
+              <button type="button" onClick={exportLibrary}>
                 <Download size={17} strokeWidth={1.8} />
                 {t("actions.exportSkillpack")}
               </button>
-              <button type="button" onClick={() => setUtilityMessage(t("workspace.packages.importPreview"))}>
+              <button type="button" onClick={() => void importSkillpack()}>
                 <FolderInput size={17} strokeWidth={1.8} />
                 {t("nav.import")}
               </button>
