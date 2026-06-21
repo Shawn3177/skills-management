@@ -40,3 +40,5 @@ export function useLocale() {
     [locale, setLocale, t],
   );
 }
+
+export type TFunction = ReturnType<typeof useLocale>["t"];
