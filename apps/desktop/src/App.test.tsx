@@ -5,6 +5,8 @@ import App from "./App";
 import { messages } from "./i18n/messages";
 
 const invokeMock = vi.fn();
+const saveMock = vi.fn();
+const openMock = vi.fn();
 
 const scannedCodexSkill = {
   id: "local-scan-skill",
@@ -64,6 +66,11 @@ vi.mock("@tauri-apps/api/core", () => ({
   invoke: (...args: unknown[]) => invokeMock(...args),
 }));
 
+vi.mock("@tauri-apps/plugin-dialog", () => ({
+  save: (...args: unknown[]) => saveMock(...args),
+  open: (...args: unknown[]) => openMock(...args),
+}));
+
 function openLocalScanSkill() {
   fireEvent.click(screen.getByRole("button", { name: /local-scan-skill/ }));
 }
@@ -71,6 +78,8 @@ function openLocalScanSkill() {
 describe("App", () => {
   beforeEach(() => {
     invokeMock.mockReset();
+    saveMock.mockReset();
+    openMock.mockReset();
     localStorage.clear();
   });
 
@@ -413,23 +422,94 @@ describe("App", () => {
     expect(screen.queryByText(/ENOSPC/)).not.toBeInTheDocument();
   });
 
-  it("shows feedback when repair and export actions are selected", async () => {
-    invokeMock.mockResolvedValue([scannedCodexSkill]);
+  it("keeps repair as a preview and exports the selected skill to a .skillpack", async () => {
+    invokeMock.mockImplementation((command: string) => {
+      if (command === "scan_skills") {
+        return Promise.resolve([scannedCodexSkill]);
+      }
+      if (command === "export_skillpack") {
+        return Promise.resolve({
+          skillCount: 1,
+          destination: "C:/out/local-scan-skill.skillpack",
+          message: "ok",
+        });
+      }
+      return Promise.reject(new Error(`Unexpected command: ${command}`));
+    });
 
     render(<App />);
     await waitFor(() => expect(screen.getAllByText("local-scan-skill").length).toBeGreaterThan(0));
     fireEvent.click(screen.getByRole("button", { name: "EN" }));
     openLocalScanSkill();
 
-    const repairButton = screen.getByRole("button", { name: "Repair" });
-    expect(repairButton).toBeEnabled();
-    fireEvent.click(repairButton);
-    expect(screen.getByText("Repair checks for local-scan-skill are waiting for the repair backend.")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Repair" }));
+    expect(
+      screen.getByText("Repair checks for local-scan-skill are waiting for the repair backend."),
+    ).toBeInTheDocument();
 
-    const exportButton = screen.getByRole("button", { name: "Export .skillpack" });
-    expect(exportButton).toBeEnabled();
-    fireEvent.click(exportButton);
-    expect(screen.getByText("Export for local-scan-skill is waiting for the .skillpack backend.")).toBeInTheDocument();
+    saveMock.mockResolvedValue("C:/out/local-scan-skill.skillpack");
+    fireEvent.click(screen.getByRole("button", { name: "Export .skillpack" }));
+
+    await waitFor(() =>
+      expect(invokeMock).toHaveBeenCalledWith(
+        "export_skillpack",
+        expect.objectContaining({
+          destination: "C:/out/local-scan-skill.skillpack",
+          sources: expect.arrayContaining([
+            expect.objectContaining({ sourcePath: scannedCodexSkill.sourcePath, name: "local-scan-skill" }),
+          ]),
+        }),
+      ),
+    );
+    await waitFor(() => expect(screen.getByText("Exported 1 skills to .skillpack.")).toBeInTheDocument());
+  });
+
+  it("does not export when the save dialog is cancelled", async () => {
+    invokeMock.mockResolvedValue([scannedCodexSkill]);
+    saveMock.mockResolvedValue(null);
+
+    render(<App />);
+    await waitFor(() => expect(screen.getAllByText("local-scan-skill").length).toBeGreaterThan(0));
+    fireEvent.click(screen.getByRole("button", { name: "EN" }));
+    openLocalScanSkill();
+
+    fireEvent.click(screen.getByRole("button", { name: "Export .skillpack" }));
+
+    await waitFor(() => expect(saveMock).toHaveBeenCalled());
+    expect(invokeMock).not.toHaveBeenCalledWith("export_skillpack", expect.anything());
+  });
+
+  it("imports a .skillpack chosen from the Packages tab", async () => {
+    let scanCount = 0;
+    invokeMock.mockImplementation((command: string) => {
+      if (command === "scan_skills") {
+        scanCount += 1;
+        return Promise.resolve(
+          scanCount === 1 ? [scannedCodexSkill] : [scannedCodexSkill, sharedLibrarySkill],
+        );
+      }
+      if (command === "import_skillpack") {
+        return Promise.resolve({ imported: 1, skillCount: 1, message: "ok" });
+      }
+      return Promise.reject(new Error(`Unexpected command: ${command}`));
+    });
+
+    render(<App />);
+    await waitFor(() => expect(screen.getAllByText("local-scan-skill").length).toBeGreaterThan(0));
+    fireEvent.click(screen.getByRole("button", { name: "EN" }));
+    fireEvent.click(screen.getByRole("button", { name: "Packages" }));
+
+    openMock.mockResolvedValue("C:/in/library.skillpack");
+    fireEvent.click(screen.getByRole("button", { name: "Import" }));
+
+    await waitFor(() =>
+      expect(invokeMock).toHaveBeenCalledWith("import_skillpack", {
+        packagePath: "C:/in/library.skillpack",
+      }),
+    );
+    await waitFor(() =>
+      expect(screen.getByText("Imported 1 skills from .skillpack.")).toBeInTheDocument(),
+    );
   });
 
   it("explains why target switches are locked before a skill is imported", async () => {

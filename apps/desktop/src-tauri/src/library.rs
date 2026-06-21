@@ -75,7 +75,7 @@ pub fn import_skill_to_library_with_root(
     })
 }
 
-fn default_data_root() -> Result<PathBuf, String> {
+pub(crate) fn default_data_root() -> Result<PathBuf, String> {
     if let Ok(path) = std::env::var("SKILLS_MANAGE_DATA_ROOT") {
         return Ok(PathBuf::from(path));
     }
@@ -104,7 +104,7 @@ fn unique_destination(library_root: &Path, skill_name: &str) -> PathBuf {
     unreachable!("unbounded copy index should always find an available folder")
 }
 
-fn safe_folder_name(value: &str) -> String {
+pub(crate) fn safe_folder_name(value: &str) -> String {
     let sanitized = value
         .chars()
         .map(|character| {
@@ -153,7 +153,7 @@ fn copy_skill_dir(source: &Path, destination: &Path) -> Result<(), String> {
     Ok(())
 }
 
-fn is_excluded_entry(name: &str) -> bool {
+pub(crate) fn is_excluded_entry(name: &str) -> bool {
     matches!(
         name,
         ".git" | ".env" | "node_modules" | "dist" | "target" | "cache" | ".cache"

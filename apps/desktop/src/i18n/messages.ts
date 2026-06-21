@@ -39,7 +39,11 @@ export type MessageKey =
   | "actions.repair"
   | "actions.exportSkillpack"
   | "actions.repairPreview"
-  | "actions.exportPreview"
+  | "actions.exportingSkillpack"
+  | "actions.exportedSkillpack"
+  | "actions.importingSkillpack"
+  | "actions.importedSkillpack"
+  | "actions.exportLibraryEmpty"
   | "actions.enable"
   | "actions.disable"
   | "actions.saving"
@@ -78,7 +82,6 @@ export type MessageKey =
   | "workspace.import.bulkActions"
   | "workspace.packages.title"
   | "workspace.packages.body"
-  | "workspace.packages.importPreview"
   | "workspace.settings.title"
   | "workspace.settings.body"
   | "workspace.settings.backupValue"
@@ -104,7 +107,9 @@ export type MessageKey =
   | "errors.importFallback"
   | "errors.targetFallback"
   | "errors.targetConflict"
-  | "errors.bridgeAction";
+  | "errors.bridgeAction"
+  | "errors.exportFallback"
+  | "errors.importPackFallback";
 
 export type MessageParams = Record<string, string | number>;
 
@@ -139,7 +144,11 @@ export const messages: Record<Locale, Record<MessageKey, string>> = {
     "actions.repair": "修复",
     "actions.exportSkillpack": "导出 .skillpack",
     "actions.repairPreview": "{skillName} 的修复检查正在等待后端接入。",
-    "actions.exportPreview": "{skillName} 的 .skillpack 导出正在等待后端接入。",
+    "actions.exportingSkillpack": "正在导出 .skillpack…",
+    "actions.exportedSkillpack": "已导出 {count} 个技能到 .skillpack。",
+    "actions.importingSkillpack": "正在导入 .skillpack…",
+    "actions.importedSkillpack": "已从 .skillpack 导入 {count} 个技能。",
+    "actions.exportLibraryEmpty": "共享库为空，没有可导出的技能。",
     "actions.enable": "启用",
     "actions.disable": "停用",
     "actions.saving": "保存中",
@@ -177,8 +186,7 @@ export const messages: Record<Locale, Record<MessageKey, string>> = {
     "workspace.import.emptyHint": "前往「技能」页导入本地技能。",
     "workspace.import.bulkActions": "批量操作",
     "workspace.packages.title": ".skillpack 包",
-    "workspace.packages.body": "集中处理技能包导入和导出。当前先开放入口，后端打包能力会单独接入。",
-    "workspace.packages.importPreview": ".skillpack 导入正在等待后端接入。",
+    "workspace.packages.body": "导入和导出 .skillpack：把共享库打包带到另一台电脑，或导入已有的技能包。",
     "workspace.settings.title": "本地设置",
     "workspace.settings.body": "查看数据目录、备份策略和包格式。写入类设置会在后端安全策略完成后开放。",
     "workspace.settings.backupValue": "托管写入前备份",
@@ -205,6 +213,8 @@ export const messages: Record<Locale, Record<MessageKey, string>> = {
     "errors.targetFallback": "无法更新 {targetName}。请检查目标文件夹后重试。",
     "errors.targetConflict": "目标目录已存在，且不由 Skills Manage 管理。",
     "errors.bridgeAction": "该操作需要在桌面应用窗口中运行。",
+    "errors.exportFallback": "导出失败，请重试。",
+    "errors.importPackFallback": "导入 .skillpack 失败，文件可能无效或损坏。",
   },
   "en-US": {
     "app.title": "Skills Manage",
@@ -236,7 +246,11 @@ export const messages: Record<Locale, Record<MessageKey, string>> = {
     "actions.repair": "Repair",
     "actions.exportSkillpack": "Export .skillpack",
     "actions.repairPreview": "Repair checks for {skillName} are waiting for the repair backend.",
-    "actions.exportPreview": "Export for {skillName} is waiting for the .skillpack backend.",
+    "actions.exportingSkillpack": "Exporting .skillpack…",
+    "actions.exportedSkillpack": "Exported {count} skills to .skillpack.",
+    "actions.importingSkillpack": "Importing .skillpack…",
+    "actions.importedSkillpack": "Imported {count} skills from .skillpack.",
+    "actions.exportLibraryEmpty": "The shared library has no skills to export.",
     "actions.enable": "Enable",
     "actions.disable": "Disable",
     "actions.saving": "Saving",
@@ -274,8 +288,7 @@ export const messages: Record<Locale, Record<MessageKey, string>> = {
     "workspace.import.emptyHint": "Go to the Skills tab to import local skills.",
     "workspace.import.bulkActions": "Bulk actions",
     "workspace.packages.title": ".skillpack packages",
-    "workspace.packages.body": "Handle skill package import and export from one place. The backend packaging flow is still a separate follow-up.",
-    "workspace.packages.importPreview": ".skillpack import is waiting for the packaging backend.",
+    "workspace.packages.body": "Import and export .skillpack bundles: pack your shared library to move it to another machine, or import an existing bundle.",
     "workspace.settings.title": "Local settings",
     "workspace.settings.body": "Review the data root, backup policy, and package format. Writeable settings open after the backend safety path is ready.",
     "workspace.settings.backupValue": "Back up before managed writes",
@@ -302,6 +315,8 @@ export const messages: Record<Locale, Record<MessageKey, string>> = {
     "errors.targetFallback": "Could not update {targetName}. Check the target folder and try again.",
     "errors.targetConflict": "The target folder already exists and is not managed by Skills Manage.",
     "errors.bridgeAction": "This action runs in the desktop app window.",
+    "errors.exportFallback": "Export failed. Please try again.",
+    "errors.importPackFallback": "Could not import the .skillpack. The file may be invalid.",
   },
 };
 

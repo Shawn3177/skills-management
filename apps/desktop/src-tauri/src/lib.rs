@@ -1,9 +1,14 @@
 use serde::Serialize;
 
 mod library;
+mod pack;
 mod scanner;
 mod targets;
 use library::{import_skill_to_library as import_skill_to_library_impl, ImportResult};
+use pack::{
+    export_skillpack as export_skillpack_impl, import_skillpack as import_skillpack_impl,
+    ExportResult, ExportSkillInput, ImportPackResult,
+};
 use scanner::{scan_default_skills, ScannedSkill};
 use targets::{set_skill_target_enabled as set_skill_target_enabled_impl, TargetToggleResult};
 
@@ -50,15 +55,31 @@ fn set_skill_target_enabled(
     set_skill_target_enabled_impl(source_path, target_id, enabled)
 }
 
+#[tauri::command]
+fn export_skillpack(
+    sources: Vec<ExportSkillInput>,
+    destination: String,
+) -> Result<ExportResult, String> {
+    export_skillpack_impl(sources, destination)
+}
+
+#[tauri::command]
+fn import_skillpack(package_path: String) -> Result<ImportPackResult, String> {
+    import_skillpack_impl(package_path)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
             get_app_status,
             scan_skills,
             import_skill_to_library,
-            set_skill_target_enabled
+            set_skill_target_enabled,
+            export_skillpack,
+            import_skillpack
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
