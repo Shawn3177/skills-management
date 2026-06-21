@@ -11,7 +11,10 @@ use pack::{
     ExportResult, ExportSkillInput, ImportPackResult,
 };
 use scanner::{scan_default_skills, ScannedSkill};
-use targets::{set_skill_target_enabled as set_skill_target_enabled_impl, TargetToggleResult};
+use targets::{
+    set_skill_target_enabled as set_skill_target_enabled_impl,
+    set_skill_targets_bulk as set_skill_targets_bulk_impl, BulkToggleResult, TargetToggleResult,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct AppStatus {
@@ -57,6 +60,15 @@ fn set_skill_target_enabled(
 }
 
 #[tauri::command]
+fn set_skill_targets_bulk(
+    source_paths: Vec<String>,
+    target_id: String,
+    enabled: bool,
+) -> Result<BulkToggleResult, String> {
+    set_skill_targets_bulk_impl(source_paths, target_id, enabled)
+}
+
+#[tauri::command]
 fn export_skillpack(
     sources: Vec<ExportSkillInput>,
     destination: String,
@@ -79,6 +91,7 @@ pub fn run() {
             scan_skills,
             import_skill_to_library,
             set_skill_target_enabled,
+            set_skill_targets_bulk,
             export_skillpack,
             import_skillpack
         ])

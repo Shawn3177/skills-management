@@ -19,6 +19,16 @@ pub struct TargetToggleResult {
     pub message: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BulkToggleResult {
+    pub succeeded: usize,
+    pub failed: usize,
+    pub target_id: String,
+    pub target_name: String,
+    pub enabled: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct ManagedMarker {
@@ -50,6 +60,58 @@ pub fn set_skill_target_enabled(
         &data_root,
         &target.root,
     )
+}
+
+pub fn set_skill_targets_bulk(
+    source_paths: Vec<String>,
+    target_id: String,
+    enabled: bool,
+) -> Result<BulkToggleResult, String> {
+    let data_root = default_data_root()?;
+    let target = target_profile(&target_id)?;
+    set_skill_targets_bulk_with_root(source_paths, target.id, enabled, &data_root, &target.root)
+}
+
+fn set_skill_targets_bulk_with_root(
+    source_paths: Vec<String>,
+    target_id: &str,
+    enabled: bool,
+    data_root: &Path,
+    target_root: &Path,
+) -> Result<BulkToggleResult, String> {
+    let target = target_profile_with_root(target_id, target_root)?;
+
+    let mut succeeded = 0usize;
+    let mut failed = 0usize;
+    let mut last_error: Option<String> = None;
+
+    for source_path in &source_paths {
+        match set_skill_target_enabled_with_root(
+            Path::new(source_path),
+            target.id,
+            enabled,
+            data_root,
+            &target.root,
+        ) {
+            Ok(_) => succeeded += 1,
+            Err(error) => {
+                failed += 1;
+                last_error = Some(error);
+            }
+        }
+    }
+
+    if succeeded == 0 {
+        return Err(last_error.unwrap_or_else(|| "No skills were updated.".to_string()));
+    }
+
+    Ok(BulkToggleResult {
+        succeeded,
+        failed,
+        target_id: target.id.to_string(),
+        target_name: target.name.to_string(),
+        enabled,
+    })
 }
 
 pub fn set_skill_target_enabled_with_root(
@@ -564,6 +626,37 @@ mod tests {
 
         assert!(error.contains("not managed by Skills Manage"));
         assert!(target_root.join("user-owned").join("SKILL.md").is_file());
+
+        fs::remove_dir_all(data_root).unwrap();
+        fs::remove_dir_all(target_root).unwrap();
+    }
+
+    #[test]
+    fn bulk_enables_multiple_library_skills() {
+        let data_root = unique_temp_dir("data-root-bulk-enable");
+        let first = create_library_skill(&data_root, "bulk-one");
+        let second = create_library_skill(&data_root, "bulk-two");
+        let target_root = unique_temp_dir("codex-bulk-enable");
+
+        let result = set_skill_targets_bulk_with_root(
+            vec![first.display().to_string(), second.display().to_string()],
+            "codex",
+            true,
+            &data_root,
+            &target_root,
+        )
+        .unwrap();
+
+        assert_eq!(result.succeeded, 2);
+        assert_eq!(result.failed, 0);
+        assert!(target_root
+            .join("bulk-one")
+            .join(".skills-manage-link.json")
+            .is_file());
+        assert!(target_root
+            .join("bulk-two")
+            .join(".skills-manage-link.json")
+            .is_file());
 
         fs::remove_dir_all(data_root).unwrap();
         fs::remove_dir_all(target_root).unwrap();

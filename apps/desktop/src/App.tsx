@@ -250,53 +250,38 @@ function App() {
 
     setTargetActionState("saving");
     setSavingKey(`bulk::${targetId}::${enabled ? "on" : "off"}`);
+    setTargetActionMessage(
+      t(enabled ? "actions.enablingAllForTarget" : "actions.disablingAllForTarget", { targetName }),
+    );
 
-    let completed = 0;
-    let lastError: unknown = null;
-
-    for (const skill of candidates) {
-      setTargetActionMessage(
-        t(enabled ? "actions.enablingSkillForTarget" : "actions.disablingSkillForTarget", {
-          skillName: skill.name,
-          targetName,
-        }),
-      );
-
-      try {
-        await invoke<TargetToggleResult>("set_skill_target_enabled", {
-          sourcePath: skill.sourcePath,
-          targetId,
-          enabled,
-        });
-        completed += 1;
-      } catch (error) {
-        console.error("set_skill_target_enabled failed", error);
-        lastError = error;
-      }
-    }
-
-    const failed = candidates.length - completed;
-
-    if (completed > 0) {
+    try {
+      const result = await invoke<{ succeeded: number; failed: number }>("set_skill_targets_bulk", {
+        sourcePaths: candidates.map((skill) => skill.sourcePath),
+        targetId,
+        enabled,
+      });
+      const { succeeded, failed } = result;
       setTargetActionState(failed > 0 ? "error" : "success");
       setTargetActionMessage(
         failed > 0
           ? t(enabled ? "actions.enabledAllForTargetPartial" : "actions.disabledAllForTargetPartial", {
-              count: completed,
+              count: succeeded,
               failed,
               targetName,
             })
           : t(enabled ? "actions.enabledAllForTarget" : "actions.disabledAllForTarget", {
-              count: completed,
+              count: succeeded,
               targetName,
             }),
       );
-    } else {
+    } catch (error) {
+      console.error("set_skill_targets_bulk failed", error);
       setTargetActionState("error");
-      setTargetActionMessage(describeTargetError(lastError, t, targetName));
+      setTargetActionMessage(describeTargetError(error, t, targetName));
+    } finally {
+      setSavingKey("");
     }
 
-    setSavingKey("");
     await loadSkills({ keepDetailOpen: detailOpen, preserveImportMessage: true });
   }
 

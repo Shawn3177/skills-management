@@ -221,7 +221,7 @@ describe("App", () => {
         target.id === "claude-code" ? { ...target, enabled: true } : target,
       ),
     });
-    invokeMock.mockImplementation((command: string, args?: { targetId?: string }) => {
+    invokeMock.mockImplementation((command: string) => {
       if (command === "scan_skills") {
         scanCount += 1;
         return Promise.resolve(
@@ -231,15 +231,13 @@ describe("App", () => {
         );
       }
 
-      if (command === "set_skill_target_enabled") {
+      if (command === "set_skill_targets_bulk") {
         return Promise.resolve({
-          targetId: args?.targetId ?? "claude-code",
+          succeeded: 2,
+          failed: 0,
+          targetId: "claude-code",
           targetName: "Claude Code",
-          skillName: "local-scan-skill",
           enabled: true,
-          changed: true,
-          targetPath: "C:/Users/example/.claude/skills/local-scan-skill",
-          message: "ok",
         });
       }
 
@@ -253,35 +251,31 @@ describe("App", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Enable all for Claude Code" }));
 
-    await waitFor(() => {
-      const calls = invokeMock.mock.calls.filter(([command]) => command === "set_skill_target_enabled");
-      expect(calls).toHaveLength(2);
-      expect(calls.every(([, args]) => args.targetId === "claude-code" && args.enabled === true)).toBe(true);
-    });
+    await waitFor(() =>
+      expect(invokeMock).toHaveBeenCalledWith("set_skill_targets_bulk", {
+        sourcePaths: [sharedLibrarySkill.sourcePath, secondSharedLibrarySkill.sourcePath],
+        targetId: "claude-code",
+        enabled: true,
+      }),
+    );
     await waitFor(() =>
       expect(screen.getByText("Enabled 2 skills for Claude Code.")).toBeInTheDocument(),
     );
   });
 
   it("surfaces the failed count when a bulk enable partially fails", async () => {
-    invokeMock.mockImplementation((command: string, args?: { sourcePath?: string; targetId?: string }) => {
+    invokeMock.mockImplementation((command: string) => {
       if (command === "scan_skills") {
         return Promise.resolve([sharedLibrarySkill, secondSharedLibrarySkill]);
       }
 
-      if (command === "set_skill_target_enabled") {
-        if (args?.sourcePath?.includes("second-local-skill")) {
-          return Promise.reject(new Error("EACCES: permission denied"));
-        }
-
+      if (command === "set_skill_targets_bulk") {
         return Promise.resolve({
-          targetId: args?.targetId ?? "claude-code",
+          succeeded: 1,
+          failed: 1,
+          targetId: "claude-code",
           targetName: "Claude Code",
-          skillName: "local-scan-skill",
           enabled: true,
-          changed: true,
-          targetPath: "C:/Users/example/.claude/skills/local-scan-skill",
-          message: "ok",
         });
       }
 
