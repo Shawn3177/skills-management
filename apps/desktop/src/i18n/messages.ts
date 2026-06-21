@@ -61,6 +61,8 @@ export type MessageKey =
   | "actions.disableAll"
   | "actions.enableAllForTarget"
   | "actions.disableAllForTarget"
+  | "actions.enablingAllForTarget"
+  | "actions.disablingAllForTarget"
   | "actions.enabledAllForTarget"
   | "actions.disabledAllForTarget"
   | "actions.enabledAllForTargetPartial"
@@ -166,6 +168,8 @@ export const messages: Record<Locale, Record<MessageKey, string>> = {
     "actions.disableAll": "全部停用",
     "actions.enableAllForTarget": "为 {targetName} 全部启用",
     "actions.disableAllForTarget": "为 {targetName} 全部停用",
+    "actions.enablingAllForTarget": "正在为 {targetName} 批量启用…",
+    "actions.disablingAllForTarget": "正在为 {targetName} 批量停用…",
     "actions.enabledAllForTarget": "已为 {targetName} 启用 {count} 个技能。",
     "actions.disabledAllForTarget": "已为 {targetName} 停用 {count} 个技能。",
     "actions.enabledAllForTargetPartial": "已为 {targetName} 启用 {count} 个技能，{failed} 个失败。",
@@ -268,6 +272,8 @@ export const messages: Record<Locale, Record<MessageKey, string>> = {
     "actions.disableAll": "Disable all",
     "actions.enableAllForTarget": "Enable all for {targetName}",
     "actions.disableAllForTarget": "Disable all for {targetName}",
+    "actions.enablingAllForTarget": "Enabling all for {targetName}…",
+    "actions.disablingAllForTarget": "Disabling all for {targetName}…",
     "actions.enabledAllForTarget": "Enabled {count} skills for {targetName}.",
     "actions.disabledAllForTarget": "Disabled {count} skills for {targetName}.",
     "actions.enabledAllForTargetPartial": "Enabled {count} skills for {targetName}, {failed} failed.",
