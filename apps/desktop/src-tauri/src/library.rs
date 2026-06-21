@@ -1,3 +1,4 @@
+use crate::fs_ops::{copy_skill_dir, default_data_root, safe_folder_name};
 use serde::Serialize;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -75,20 +76,8 @@ pub fn import_skill_to_library_with_root(
     })
 }
 
-pub(crate) fn default_data_root() -> Result<PathBuf, String> {
-    if let Ok(path) = std::env::var("SKILLS_MANAGE_DATA_ROOT") {
-        return Ok(PathBuf::from(path));
-    }
-
-    let home = std::env::var("USERPROFILE")
-        .or_else(|_| std::env::var("HOME"))
-        .map_err(|_| "Could not determine home directory.".to_string())?;
-
-    Ok(PathBuf::from(home).join(".skills-manage"))
-}
-
-fn unique_destination(library_root: &Path, skill_name: &str) -> PathBuf {
-    let safe_name = safe_folder_name(skill_name);
+pub(crate) fn unique_destination(library_root: &Path, skill_name: &str) -> PathBuf {
+    let safe_name = safe_folder_name(skill_name, "imported-skill");
     let first = library_root.join(&safe_name);
     if !first.exists() {
         return first;
@@ -102,62 +91,6 @@ fn unique_destination(library_root: &Path, skill_name: &str) -> PathBuf {
     }
 
     unreachable!("unbounded copy index should always find an available folder")
-}
-
-pub(crate) fn safe_folder_name(value: &str) -> String {
-    let sanitized = value
-        .chars()
-        .map(|character| {
-            if character.is_ascii_alphanumeric() || character == '-' || character == '_' {
-                character
-            } else {
-                '-'
-            }
-        })
-        .collect::<String>()
-        .trim_matches('-')
-        .to_string();
-
-    if sanitized.is_empty() {
-        "imported-skill".to_string()
-    } else {
-        sanitized
-    }
-}
-
-fn copy_skill_dir(source: &Path, destination: &Path) -> Result<(), String> {
-    fs::create_dir_all(destination)
-        .map_err(|error| format!("Could not create destination: {error}"))?;
-
-    for entry in fs::read_dir(source).map_err(|error| format!("Could not read source: {error}"))? {
-        let entry = entry.map_err(|error| format!("Could not read source entry: {error}"))?;
-        let name = entry.file_name();
-        let name_text = name.to_string_lossy();
-
-        if is_excluded_entry(&name_text) {
-            continue;
-        }
-
-        let source_path = entry.path();
-        let destination_path = destination.join(&name);
-
-        if source_path.is_dir() {
-            copy_skill_dir(&source_path, &destination_path)?;
-        } else if source_path.is_file() {
-            fs::copy(&source_path, &destination_path).map_err(|error| {
-                format!("Could not copy file {}: {error}", source_path.display())
-            })?;
-        }
-    }
-
-    Ok(())
-}
-
-pub(crate) fn is_excluded_entry(name: &str) -> bool {
-    matches!(
-        name,
-        ".git" | ".env" | "node_modules" | "dist" | "target" | "cache" | ".cache"
-    )
 }
 
 #[cfg(test)]

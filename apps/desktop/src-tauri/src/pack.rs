@@ -1,27 +1,18 @@
-use crate::library::{
-    default_data_root, import_skill_to_library_with_root, is_excluded_entry, safe_folder_name,
+use crate::fs_ops::{
+    default_data_root, excluded_entries, is_excluded_entry, safe_folder_name, unix_ms,
 };
+use crate::library::import_skill_to_library_with_root;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::fs::{self, File};
 use std::io::{Read, Write};
 use std::path::{Component, Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
 use zip::write::SimpleFileOptions;
 use zip::{ZipArchive, ZipWriter};
 
 const FORMAT_VERSION: u32 = 1;
 const SOURCE_APP_VERSION: &str = env!("CARGO_PKG_VERSION");
-const EXCLUSIONS: [&str; 7] = [
-    ".git",
-    ".env",
-    "node_modules",
-    "dist",
-    "target",
-    "cache",
-    ".cache",
-];
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -108,7 +99,7 @@ pub fn export_skillpack(
             ));
         }
 
-        let safe_name = dedupe_name(&mut used_names, safe_folder_name(&source.name));
+        let safe_name = dedupe_name(&mut used_names, safe_folder_name(&source.name, "imported-skill"));
         let prefix = format!("skills/{safe_name}");
 
         add_dir_to_zip(&mut zip, options, source_path, &prefix, &mut checksums)?;
@@ -130,7 +121,7 @@ pub fn export_skillpack(
         package_id: format!("skillpack-{}", unix_ms()),
         created_at: unix_ms(),
         source_app_version: SOURCE_APP_VERSION.to_string(),
-        exclusions: EXCLUSIONS.iter().map(|value| value.to_string()).collect(),
+        exclusions: excluded_entries().iter().map(|value| value.to_string()).collect(),
         skills: manifest_skills,
         checksums,
     };
@@ -344,16 +335,10 @@ fn sha256_hex(bytes: &[u8]) -> String {
         .collect()
 }
 
-fn unix_ms() -> u128 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     fn unique_temp_dir(prefix: &str) -> PathBuf {
         let stamp = SystemTime::now()

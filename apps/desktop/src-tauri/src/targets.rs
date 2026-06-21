@@ -1,7 +1,9 @@
+use crate::fs_ops::{
+    copy_dir_excluding, default_data_root, is_excluded_entry, safe_folder_name, unix_ms,
+};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
 
 const MARKER_FILE: &str = ".skills-manage-link.json";
 
@@ -141,7 +143,8 @@ where
 
     let staging_destination = unique_staging_path(&target.root, skill_name)?;
 
-    if let Err(error) = copy_skill_dir(source_path, &staging_destination) {
+    let excluded = |name: &str| is_excluded_entry(name) || name == MARKER_FILE;
+    if let Err(error) = copy_dir_excluding(source_path, &staging_destination, excluded) {
         return Err(cleanup_staging_after_failure(&staging_destination, error));
     }
 
@@ -302,18 +305,6 @@ fn target_profile_with_root(target_id: &str, root: &Path) -> Result<TargetProfil
     })
 }
 
-fn default_data_root() -> Result<PathBuf, String> {
-    if let Ok(path) = std::env::var("SKILLS_MANAGE_DATA_ROOT") {
-        return Ok(PathBuf::from(path));
-    }
-
-    let home = std::env::var("USERPROFILE")
-        .or_else(|_| std::env::var("HOME"))
-        .map_err(|_| "Could not determine home directory.".to_string())?;
-
-    Ok(PathBuf::from(home).join(".skills-manage"))
-}
-
 fn write_marker(
     destination: &Path,
     source_canonical: &Path,
@@ -422,71 +413,8 @@ fn skill_folder_name(source_path: &Path) -> String {
         .file_name()
         .and_then(|value| value.to_str())
         .filter(|value| !value.trim().is_empty())
-        .map(safe_folder_name)
+        .map(|value| safe_folder_name(value, "managed-skill"))
         .unwrap_or_else(|| "managed-skill".to_string())
-}
-
-fn safe_folder_name(value: &str) -> String {
-    let sanitized = value
-        .chars()
-        .map(|character| {
-            if character.is_ascii_alphanumeric() || character == '-' || character == '_' {
-                character
-            } else {
-                '-'
-            }
-        })
-        .collect::<String>()
-        .trim_matches('-')
-        .to_string();
-
-    if sanitized.is_empty() {
-        "managed-skill".to_string()
-    } else {
-        sanitized
-    }
-}
-
-fn copy_skill_dir(source: &Path, destination: &Path) -> Result<(), String> {
-    fs::create_dir_all(destination)
-        .map_err(|error| format!("Could not create target destination: {error}"))?;
-
-    for entry in fs::read_dir(source).map_err(|error| format!("Could not read source: {error}"))? {
-        let entry = entry.map_err(|error| format!("Could not read source entry: {error}"))?;
-        let name = entry.file_name();
-        let name_text = name.to_string_lossy();
-
-        if is_excluded_entry(&name_text) {
-            continue;
-        }
-
-        let source_path = entry.path();
-        let destination_path = destination.join(&name);
-
-        if source_path.is_dir() {
-            copy_skill_dir(&source_path, &destination_path)?;
-        } else if source_path.is_file() {
-            fs::copy(&source_path, &destination_path).map_err(|error| {
-                format!("Could not copy file {}: {error}", source_path.display())
-            })?;
-        }
-    }
-
-    Ok(())
-}
-
-fn is_excluded_entry(name: &str) -> bool {
-    matches!(
-        name,
-        ".git" | ".env" | "node_modules" | "dist" | "target" | "cache" | ".cache" | MARKER_FILE
-    )
-}
-
-fn unix_ms() -> u128 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis()
 }
 
 #[cfg(test)]

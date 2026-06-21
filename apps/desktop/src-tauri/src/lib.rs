@@ -1,5 +1,6 @@
 use serde::Serialize;
 
+mod fs_ops;
 mod library;
 mod pack;
 mod scanner;

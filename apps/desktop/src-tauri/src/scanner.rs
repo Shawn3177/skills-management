@@ -1,3 +1,4 @@
+use crate::fs_ops::home_dir;
 use crate::targets::is_managed_target_copy;
 use serde::Serialize;
 use std::fs;
@@ -295,12 +296,6 @@ fn slug_id(value: &str) -> String {
         .join("-")
 }
 
-fn home_dir() -> Option<PathBuf> {
-    std::env::var("USERPROFILE")
-        .or_else(|_| std::env::var("HOME"))
-        .ok()
-        .map(PathBuf::from)
-}
 
 #[cfg(test)]
 mod tests {
