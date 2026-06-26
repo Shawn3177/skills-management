@@ -1,10 +1,12 @@
 use serde::Serialize;
 
 mod fs_ops;
+mod github;
 mod library;
 mod pack;
 mod scanner;
 mod targets;
+use github::{import_from_github as import_from_github_impl, GithubImportResult};
 use library::{import_skill_to_library as import_skill_to_library_impl, ImportResult};
 use pack::{
     export_skillpack as export_skillpack_impl, import_skillpack as import_skillpack_impl,
@@ -51,6 +53,11 @@ fn import_skill_to_library(source_path: String) -> Result<ImportResult, String> 
 }
 
 #[tauri::command]
+fn import_from_github(url: String) -> Result<GithubImportResult, String> {
+    import_from_github_impl(url)
+}
+
+#[tauri::command]
 fn set_skill_target_enabled(
     source_path: String,
     target_id: String,
@@ -90,6 +97,7 @@ pub fn run() {
             get_app_status,
             scan_skills,
             import_skill_to_library,
+            import_from_github,
             set_skill_target_enabled,
             set_skill_targets_bulk,
             export_skillpack,

@@ -43,6 +43,9 @@ export type MessageKey =
   | "actions.exportedSkillpack"
   | "actions.importingSkillpack"
   | "actions.importedSkillpack"
+  | "actions.importFromGithub"
+  | "actions.importingGithub"
+  | "actions.importedGithub"
   | "actions.exportLibraryEmpty"
   | "actions.enable"
   | "actions.disable"
@@ -84,6 +87,8 @@ export type MessageKey =
   | "workspace.import.bulkActions"
   | "workspace.packages.title"
   | "workspace.packages.body"
+  | "workspace.packages.githubLabel"
+  | "workspace.packages.githubHint"
   | "workspace.settings.title"
   | "workspace.settings.body"
   | "workspace.settings.backupValue"
@@ -111,7 +116,8 @@ export type MessageKey =
   | "errors.targetConflict"
   | "errors.bridgeAction"
   | "errors.exportFallback"
-  | "errors.importPackFallback";
+  | "errors.importPackFallback"
+  | "errors.githubImportFailed";
 
 export type MessageParams = Record<string, string | number>;
 
@@ -150,6 +156,9 @@ export const messages: Record<Locale, Record<MessageKey, string>> = {
     "actions.exportedSkillpack": "已导出 {count} 个技能到 .skillpack。",
     "actions.importingSkillpack": "正在导入 .skillpack…",
     "actions.importedSkillpack": "已从 .skillpack 导入 {count} 个技能。",
+    "actions.importFromGithub": "从 GitHub 导入",
+    "actions.importingGithub": "正在从 GitHub 导入…",
+    "actions.importedGithub": "已从 GitHub 导入 {skillName}。",
     "actions.exportLibraryEmpty": "共享库为空，没有可导出的技能。",
     "actions.enable": "启用",
     "actions.disable": "停用",
@@ -191,6 +200,8 @@ export const messages: Record<Locale, Record<MessageKey, string>> = {
     "workspace.import.bulkActions": "批量操作",
     "workspace.packages.title": ".skillpack 包",
     "workspace.packages.body": "导入和导出 .skillpack：把共享库打包带到另一台电脑，或导入已有的技能包。",
+    "workspace.packages.githubLabel": "从 GitHub 导入技能",
+    "workspace.packages.githubHint": "粘贴公开仓库地址，或指向某个技能文件夹的 /tree/<分支>/<子目录> 地址。仅支持公开仓库。",
     "workspace.settings.title": "本地设置",
     "workspace.settings.body": "查看数据目录、备份策略和包格式。写入类设置会在后端安全策略完成后开放。",
     "workspace.settings.backupValue": "托管写入前备份",
@@ -219,6 +230,7 @@ export const messages: Record<Locale, Record<MessageKey, string>> = {
     "errors.bridgeAction": "该操作需要在桌面应用窗口中运行。",
     "errors.exportFallback": "导出失败，请重试。",
     "errors.importPackFallback": "导入 .skillpack 失败，文件可能无效或损坏。",
+    "errors.githubImportFailed": "从 GitHub 导入失败：{reason}",
   },
   "en-US": {
     "app.title": "Skills Manage",
@@ -254,6 +266,9 @@ export const messages: Record<Locale, Record<MessageKey, string>> = {
     "actions.exportedSkillpack": "Exported {count} skills to .skillpack.",
     "actions.importingSkillpack": "Importing .skillpack…",
     "actions.importedSkillpack": "Imported {count} skills from .skillpack.",
+    "actions.importFromGithub": "Import from GitHub",
+    "actions.importingGithub": "Importing from GitHub…",
+    "actions.importedGithub": "Imported {skillName} from GitHub.",
     "actions.exportLibraryEmpty": "The shared library has no skills to export.",
     "actions.enable": "Enable",
     "actions.disable": "Disable",
@@ -295,6 +310,8 @@ export const messages: Record<Locale, Record<MessageKey, string>> = {
     "workspace.import.bulkActions": "Bulk actions",
     "workspace.packages.title": ".skillpack packages",
     "workspace.packages.body": "Import and export .skillpack bundles: pack your shared library to move it to another machine, or import an existing bundle.",
+    "workspace.packages.githubLabel": "Import a skill from GitHub",
+    "workspace.packages.githubHint": "Paste a public repo URL, or a /tree/<branch>/<subdir> URL pointing at a skill folder. Public repositories only.",
     "workspace.settings.title": "Local settings",
     "workspace.settings.body": "Review the data root, backup policy, and package format. Writeable settings open after the backend safety path is ready.",
     "workspace.settings.backupValue": "Back up before managed writes",
@@ -323,6 +340,7 @@ export const messages: Record<Locale, Record<MessageKey, string>> = {
     "errors.bridgeAction": "This action runs in the desktop app window.",
     "errors.exportFallback": "Export failed. Please try again.",
     "errors.importPackFallback": "Could not import the .skillpack. The file may be invalid.",
+    "errors.githubImportFailed": "GitHub import failed: {reason}",
   },
 };
 

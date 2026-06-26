@@ -1,5 +1,6 @@
 use crate::fs_ops::{
-    default_data_root, excluded_entries, is_excluded_entry, safe_folder_name, unix_ms,
+    default_data_root, excluded_entries, is_excluded_entry, is_internal_marker, is_safe_relative,
+    safe_folder_name, unix_ms,
 };
 use crate::library::import_skill_to_library_with_root;
 use serde::{Deserialize, Serialize};
@@ -7,7 +8,7 @@ use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::fs::{self, File};
 use std::io::{Read, Write};
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 use zip::write::SimpleFileOptions;
 use zip::{ZipArchive, ZipWriter};
 
@@ -168,7 +169,7 @@ fn add_dir_to_zip(
         let name = entry.file_name();
         let name_text = name.to_string_lossy();
 
-        if is_excluded_entry(&name_text) {
+        if is_excluded_entry(&name_text) || is_internal_marker(&name_text) {
             continue;
         }
 
@@ -304,14 +305,6 @@ fn extract_and_verify(
     Ok(())
 }
 
-fn is_safe_relative(name: &str) -> bool {
-    let path = Path::new(name);
-    path.is_relative()
-        && path
-            .components()
-            .all(|component| matches!(component, Component::Normal(_)))
-}
-
 fn unique_staging(data_root: &Path) -> Result<PathBuf, String> {
     fs::create_dir_all(data_root).map_err(|error| format!("Could not create data root: {error}"))?;
     for index in 0.. {
@@ -359,6 +352,7 @@ mod tests {
         fs::create_dir_all(dir.join(".git")).unwrap();
         fs::write(dir.join(".git").join("config"), "git").unwrap();
         fs::write(dir.join(".env"), "SECRET=1").unwrap();
+        fs::write(dir.join(".skills-manage-source.json"), "{}").unwrap();
     }
 
     #[test]
@@ -392,6 +386,7 @@ mod tests {
         assert!(imported_dir.join("scripts").join("run.ps1").is_file());
         assert!(!imported_dir.join(".git").exists());
         assert!(!imported_dir.join(".env").exists());
+        assert!(!imported_dir.join(".skills-manage-source.json").exists());
 
         let leftover_staging = fs::read_dir(&data_root)
             .unwrap()
