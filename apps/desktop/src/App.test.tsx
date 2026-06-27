@@ -573,6 +573,80 @@ describe("App", () => {
     );
   });
 
+  it("checks for GitHub updates and updates a selected skill", async () => {
+    const updateStatus = {
+      libraryPath: "C:/Users/example/.skills-manage/library/remote-skill",
+      skillName: "remote-skill",
+      state: "update-available",
+      hasUpdate: true,
+      current: "old1234",
+      latest: "new5678",
+      url: "https://github.com/owner/repo/tree/main/skills/remote-skill",
+      message: "",
+    };
+    invokeMock.mockImplementation((command: string) => {
+      if (command === "scan_skills") {
+        return Promise.resolve([scannedCodexSkill]);
+      }
+      if (command === "check_skill_updates") {
+        return Promise.resolve([updateStatus]);
+      }
+      if (command === "update_skill_from_github") {
+        return Promise.resolve({
+          skillName: "remote-skill",
+          libraryPath: updateStatus.libraryPath,
+          previousCommit: "old1234",
+          newCommit: "new5678",
+          refreshedTargets: ["Codex"],
+          failedTargets: [],
+          message: "ok",
+        });
+      }
+      return Promise.reject(new Error(`Unexpected command: ${command}`));
+    });
+
+    render(<App />);
+    await waitFor(() => expect(screen.getAllByText("local-scan-skill").length).toBeGreaterThan(0));
+    fireEvent.click(screen.getByRole("button", { name: "EN" }));
+    fireEvent.click(screen.getByRole("button", { name: "Packages" }));
+    fireEvent.click(screen.getByRole("button", { name: "Check for updates" }));
+
+    await waitFor(() => expect(invokeMock).toHaveBeenCalledWith("check_skill_updates"));
+    await waitFor(() => expect(screen.getByText("Update available")).toBeInTheDocument());
+    expect(screen.getByText("1 skill(s) have updates.")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Update selected (1)" }));
+
+    await waitFor(() =>
+      expect(invokeMock).toHaveBeenCalledWith("update_skill_from_github", {
+        libraryPath: updateStatus.libraryPath,
+      }),
+    );
+    await waitFor(() => expect(screen.getByText("Updated 1 skill(s).")).toBeInTheDocument());
+  });
+
+  it("shows an empty-state hint when there are no GitHub-sourced skills to check", async () => {
+    invokeMock.mockImplementation((command: string) => {
+      if (command === "scan_skills") {
+        return Promise.resolve([scannedCodexSkill]);
+      }
+      if (command === "check_skill_updates") {
+        return Promise.resolve([]);
+      }
+      return Promise.reject(new Error(`Unexpected command: ${command}`));
+    });
+
+    render(<App />);
+    await waitFor(() => expect(screen.getAllByText("local-scan-skill").length).toBeGreaterThan(0));
+    fireEvent.click(screen.getByRole("button", { name: "EN" }));
+    fireEvent.click(screen.getByRole("button", { name: "Packages" }));
+    fireEvent.click(screen.getByRole("button", { name: "Check for updates" }));
+
+    await waitFor(() =>
+      expect(screen.getByText("No skills imported from GitHub yet.")).toBeInTheDocument(),
+    );
+  });
+
   it("explains why target switches are locked before a skill is imported", async () => {
     invokeMock.mockResolvedValue([scannedCodexSkill]);
 

@@ -6,7 +6,11 @@ mod library;
 mod pack;
 mod scanner;
 mod targets;
-use github::{import_from_github as import_from_github_impl, GithubImportResult};
+use github::{
+    check_skill_updates as check_skill_updates_impl, import_from_github as import_from_github_impl,
+    update_skill_from_github as update_skill_from_github_impl, GithubImportResult, SkillUpdateStatus,
+    UpdateResult,
+};
 use library::{import_skill_to_library as import_skill_to_library_impl, ImportResult};
 use pack::{
     export_skillpack as export_skillpack_impl, import_skillpack as import_skillpack_impl,
@@ -58,6 +62,16 @@ fn import_from_github(url: String) -> Result<GithubImportResult, String> {
 }
 
 #[tauri::command]
+fn check_skill_updates() -> Result<Vec<SkillUpdateStatus>, String> {
+    check_skill_updates_impl()
+}
+
+#[tauri::command]
+fn update_skill_from_github(library_path: String) -> Result<UpdateResult, String> {
+    update_skill_from_github_impl(library_path)
+}
+
+#[tauri::command]
 fn set_skill_target_enabled(
     source_path: String,
     target_id: String,
@@ -98,6 +112,8 @@ pub fn run() {
             scan_skills,
             import_skill_to_library,
             import_from_github,
+            check_skill_updates,
+            update_skill_from_github,
             set_skill_target_enabled,
             set_skill_targets_bulk,
             export_skillpack,

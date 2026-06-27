@@ -57,6 +57,24 @@ type TargetToggleResult = {
   message: string;
 };
 
+type UpdateState =
+  | "up-to-date"
+  | "update-available"
+  | "source-unavailable"
+  | "rate-limited"
+  | "error";
+
+type SkillUpdateStatus = {
+  libraryPath: string;
+  skillName: string;
+  state: UpdateState;
+  hasUpdate: boolean;
+  current: string;
+  latest: string;
+  url: string;
+  message: string;
+};
+
 function isTauriBridgeUnavailable(error: unknown) {
   const message = (error instanceof Error ? error.message : String(error ?? "")).toLowerCase();
 
@@ -89,6 +107,21 @@ function describeBackendError(error: unknown) {
   return error instanceof Error ? error.message : String(error ?? "");
 }
 
+function updateStateLabel(state: UpdateState, t: TFunction) {
+  switch (state) {
+    case "update-available":
+      return t("updates.available");
+    case "up-to-date":
+      return t("updates.upToDate");
+    case "source-unavailable":
+      return t("updates.unavailable");
+    case "rate-limited":
+      return t("updates.rateLimited");
+    default:
+      return t("updates.error");
+  }
+}
+
 function App() {
   const { locale, setLocale, t } = useLocale();
   const [activeSection, setActiveSection] = useState<SectionId>("skills");
@@ -106,6 +139,11 @@ function App() {
   const [utilityState, setUtilityState] = useState<"success" | "error">("success");
   const [githubUrl, setGithubUrl] = useState("");
   const [githubBusy, setGithubBusy] = useState(false);
+  const [updateStatuses, setUpdateStatuses] = useState<SkillUpdateStatus[]>([]);
+  const [checkedUpdates, setCheckedUpdates] = useState(false);
+  const [checkingUpdates, setCheckingUpdates] = useState(false);
+  const [selectedUpdates, setSelectedUpdates] = useState<Set<string>>(new Set());
+  const [updatingSkills, setUpdatingSkills] = useState(false);
   const backButtonRef = useRef<HTMLButtonElement>(null);
   const skillListRef = useRef<HTMLElement>(null);
   const pendingFocusRef = useRef<"detail" | "list" | null>(null);
@@ -509,6 +547,97 @@ function App() {
     }
   }
 
+  async function checkForUpdates() {
+    if (checkingUpdates || updatingSkills) {
+      return;
+    }
+    setImportMessage("");
+    setUtilityState("success");
+    setUtilityMessage(t("actions.checkingUpdates"));
+    setCheckingUpdates(true);
+    try {
+      const results = await invoke<SkillUpdateStatus[]>("check_skill_updates");
+      setUpdateStatuses(results);
+      setCheckedUpdates(true);
+      setSelectedUpdates(new Set(results.filter((r) => r.hasUpdate).map((r) => r.libraryPath)));
+      const available = results.filter((r) => r.hasUpdate).length;
+      setUtilityState("success");
+      setUtilityMessage(
+        available > 0 ? t("actions.updatesFound", { count: available }) : t("actions.noUpdates"),
+      );
+    } catch (error) {
+      console.error("check_skill_updates failed", error);
+      setUtilityState("error");
+      setUtilityMessage(
+        isTauriBridgeUnavailable(error)
+          ? t("errors.bridgeAction")
+          : t("errors.githubImportFailed", { reason: describeBackendError(error) }),
+      );
+    } finally {
+      setCheckingUpdates(false);
+    }
+  }
+
+  function toggleUpdateSelected(libraryPath: string) {
+    setSelectedUpdates((prev) => {
+      const next = new Set(prev);
+      if (next.has(libraryPath)) {
+        next.delete(libraryPath);
+      } else {
+        next.add(libraryPath);
+      }
+      return next;
+    });
+  }
+
+  async function updateSelectedSkills() {
+    const pending = updateStatuses.filter(
+      (status) => status.hasUpdate && selectedUpdates.has(status.libraryPath),
+    );
+    if (pending.length === 0 || updatingSkills) {
+      return;
+    }
+
+    setImportMessage("");
+    setUtilityState("success");
+    setUtilityMessage(t("actions.updatingSkills"));
+    setUpdatingSkills(true);
+    const updated = new Set<string>();
+    let failed = 0;
+    for (const status of pending) {
+      try {
+        await invoke<{ skillName: string }>("update_skill_from_github", {
+          libraryPath: status.libraryPath,
+        });
+        updated.add(status.libraryPath);
+      } catch (error) {
+        console.error("update_skill_from_github failed", error);
+        failed += 1;
+      }
+    }
+    setUpdatingSkills(false);
+    setUpdateStatuses((prev) =>
+      prev.map((status) =>
+        updated.has(status.libraryPath)
+          ? {
+              ...status,
+              hasUpdate: false,
+              state: "up-to-date",
+              current: status.latest || status.current,
+            }
+          : status,
+      ),
+    );
+    setSelectedUpdates(new Set());
+    setUtilityState(failed > 0 ? "error" : "success");
+    setUtilityMessage(
+      failed > 0
+        ? t("actions.updatedSkillsPartial", { count: updated.size, failed })
+        : t("actions.updatedSkills", { count: updated.size }),
+    );
+    await loadSkills();
+  }
+
   function showTargetBlocked(target: { id: string; name: string }) {
     if (!selectedSkill) {
       return;
@@ -843,6 +972,60 @@ function App() {
               </div>
               <p className="github-import-hint">{t("workspace.packages.githubHint")}</p>
             </form>
+            <div className="github-updates">
+              <div className="github-updates-head">
+                <span className="github-import-label">{t("workspace.packages.updatesLabel")}</span>
+                <button
+                  type="button"
+                  onClick={() => void checkForUpdates()}
+                  disabled={checkingUpdates || updatingSkills}
+                >
+                  <RefreshCw size={16} strokeWidth={1.8} />
+                  {t("actions.checkUpdates")}
+                </button>
+              </div>
+              {checkedUpdates && updateStatuses.length === 0 ? (
+                <p className="github-import-hint">{t("workspace.packages.noGithubSkills")}</p>
+              ) : null}
+              {updateStatuses.length > 0 ? (
+                <ul className="github-update-list">
+                  {updateStatuses.map((status) => (
+                    <li key={status.libraryPath} className="github-update-item">
+                      {status.hasUpdate ? (
+                        <label className="github-update-name">
+                          <input
+                            type="checkbox"
+                            checked={selectedUpdates.has(status.libraryPath)}
+                            onChange={() => toggleUpdateSelected(status.libraryPath)}
+                            disabled={updatingSkills}
+                          />
+                          {status.skillName}
+                        </label>
+                      ) : (
+                        <span className="github-update-name">{status.skillName}</span>
+                      )}
+                      <span
+                        className={`github-update-badge github-update-badge-${status.state}`}
+                        title={status.message || undefined}
+                      >
+                        {updateStateLabel(status.state, t)}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              ) : null}
+              {updateStatuses.some((status) => status.hasUpdate) ? (
+                <button
+                  type="button"
+                  className="github-update-apply"
+                  onClick={() => void updateSelectedSkills()}
+                  disabled={updatingSkills || selectedUpdates.size === 0}
+                >
+                  <Download size={16} strokeWidth={1.8} />
+                  {t("actions.updateSelected", { count: selectedUpdates.size })}
+                </button>
+              ) : null}
+            </div>
             {utilityMessage ? <StatusMessage state={utilityState} message={utilityMessage} /> : null}
           </WorkspacePanel>
         ) : null}
