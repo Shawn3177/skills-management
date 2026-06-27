@@ -506,6 +506,73 @@ describe("App", () => {
     );
   });
 
+  it("imports a skill from a GitHub URL in the Packages tab", async () => {
+    invokeMock.mockImplementation((command: string) => {
+      if (command === "scan_skills") {
+        return Promise.resolve([scannedCodexSkill]);
+      }
+      if (command === "import_from_github") {
+        return Promise.resolve({
+          skillName: "remote-skill",
+          libraryPath: "C:/Users/example/.skills-manage/library/remote-skill",
+          message: "ok",
+        });
+      }
+      return Promise.reject(new Error(`Unexpected command: ${command}`));
+    });
+
+    render(<App />);
+    await waitFor(() => expect(screen.getAllByText("local-scan-skill").length).toBeGreaterThan(0));
+    fireEvent.click(screen.getByRole("button", { name: "EN" }));
+    fireEvent.click(screen.getByRole("button", { name: "Packages" }));
+
+    const urlInput = screen.getByRole("textbox", { name: "Import a skill from GitHub" });
+    fireEvent.change(urlInput, {
+      target: { value: "https://github.com/owner/repo/tree/main/skills/foo" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Import from GitHub" }));
+
+    await waitFor(() =>
+      expect(invokeMock).toHaveBeenCalledWith("import_from_github", {
+        url: "https://github.com/owner/repo/tree/main/skills/foo",
+      }),
+    );
+    await waitFor(() =>
+      expect(screen.getByText("Imported remote-skill from GitHub.")).toBeInTheDocument(),
+    );
+  });
+
+  it("surfaces the backend reason when a GitHub import fails", async () => {
+    invokeMock.mockImplementation((command: string) => {
+      if (command === "scan_skills") {
+        return Promise.resolve([scannedCodexSkill]);
+      }
+      if (command === "import_from_github") {
+        return Promise.reject(
+          "Repository or path not found. Only public repositories are supported.",
+        );
+      }
+      return Promise.reject(new Error(`Unexpected command: ${command}`));
+    });
+
+    render(<App />);
+    await waitFor(() => expect(screen.getAllByText("local-scan-skill").length).toBeGreaterThan(0));
+    fireEvent.click(screen.getByRole("button", { name: "EN" }));
+    fireEvent.click(screen.getByRole("button", { name: "Packages" }));
+
+    const urlInput = screen.getByRole("textbox", { name: "Import a skill from GitHub" });
+    fireEvent.change(urlInput, { target: { value: "https://github.com/owner/missing" } });
+    fireEvent.click(screen.getByRole("button", { name: "Import from GitHub" }));
+
+    await waitFor(() =>
+      expect(
+        screen.getByText(
+          "GitHub import failed: Repository or path not found. Only public repositories are supported.",
+        ),
+      ).toBeInTheDocument(),
+    );
+  });
+
   it("explains why target switches are locked before a skill is imported", async () => {
     invokeMock.mockResolvedValue([scannedCodexSkill]);
 

@@ -167,6 +167,27 @@ mod tests {
     }
 
     #[test]
+    fn excludes_internal_marker_files() {
+        let source_root = unique_temp_dir("source-markers-root");
+        let source = source_root.join("source-markers");
+        let data_root = unique_temp_dir("data-root-markers");
+        fs::create_dir_all(&source).unwrap();
+        fs::write(source.join("SKILL.md"), "# Skill\n").unwrap();
+        fs::write(source.join(".skills-manage-source.json"), "{}").unwrap();
+        fs::write(source.join(".skills-manage-link.json"), "{}").unwrap();
+
+        import_skill_to_library_with_root(&source, &data_root).unwrap();
+        let imported = data_root.join("library").join("source-markers");
+
+        assert!(imported.join("SKILL.md").is_file());
+        assert!(!imported.join(".skills-manage-source.json").exists());
+        assert!(!imported.join(".skills-manage-link.json").exists());
+
+        fs::remove_dir_all(source_root).unwrap();
+        fs::remove_dir_all(data_root).unwrap();
+    }
+
+    #[test]
     fn imports_conflicting_folder_as_copy_without_overwriting() {
         let source_root = unique_temp_dir("source-conflict-root");
         let source = source_root.join("source-conflict");

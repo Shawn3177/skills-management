@@ -1,5 +1,6 @@
 use crate::fs_ops::{
-    copy_dir_excluding, default_data_root, is_excluded_entry, safe_folder_name, unix_ms,
+    copy_dir_excluding, default_data_root, is_excluded_entry, is_internal_marker, safe_folder_name,
+    unix_ms,
 };
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -205,7 +206,7 @@ where
 
     let staging_destination = unique_staging_path(&target.root, skill_name)?;
 
-    let excluded = |name: &str| is_excluded_entry(name) || name == MARKER_FILE;
+    let excluded = |name: &str| is_excluded_entry(name) || is_internal_marker(name);
     if let Err(error) = copy_dir_excluding(source_path, &staging_destination, excluded) {
         return Err(cleanup_staging_after_failure(&staging_destination, error));
     }

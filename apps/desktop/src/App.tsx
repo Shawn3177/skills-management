@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { open, save } from "@tauri-apps/plugin-dialog";
-import { ArrowLeft, Boxes, Download, FolderInput, PackageOpen, RefreshCw, Search, Settings } from "lucide-react";
+import { ArrowLeft, Boxes, Download, FolderInput, GitBranch, PackageOpen, RefreshCw, Search, Settings } from "lucide-react";
 import "./App.css";
 import { LanguageSwitch } from "./components/LanguageSwitch";
 import {
@@ -80,6 +80,15 @@ function describeTargetError(error: unknown, t: TFunction, targetName: string) {
   return t("errors.targetFallback", { targetName });
 }
 
+// Tauri rejects a command with the backend's `Err(String)` value directly, so
+// surface that actionable message (rate limit, "not found", "no SKILL.md", …).
+function describeBackendError(error: unknown) {
+  if (typeof error === "string") {
+    return error;
+  }
+  return error instanceof Error ? error.message : String(error ?? "");
+}
+
 function App() {
   const { locale, setLocale, t } = useLocale();
   const [activeSection, setActiveSection] = useState<SectionId>("skills");
@@ -94,6 +103,9 @@ function App() {
   const [targetActionMessage, setTargetActionMessage] = useState("");
   const [savingKey, setSavingKey] = useState("");
   const [utilityMessage, setUtilityMessage] = useState("");
+  const [utilityState, setUtilityState] = useState<"success" | "error">("success");
+  const [githubUrl, setGithubUrl] = useState("");
+  const [githubBusy, setGithubBusy] = useState(false);
   const backButtonRef = useRef<HTMLButtonElement>(null);
   const skillListRef = useRef<HTMLElement>(null);
   const pendingFocusRef = useRef<"detail" | "list" | null>(null);
@@ -381,6 +393,7 @@ function App() {
   async function exportSkills(skills: SkillRecord[], defaultName: string) {
     if (skills.length === 0) {
       setImportMessage("");
+      setUtilityState("error");
       setUtilityMessage(t("actions.exportLibraryEmpty"));
       return;
     }
@@ -399,6 +412,7 @@ function App() {
     }
 
     setImportMessage("");
+    setUtilityState("success");
     setUtilityMessage(t("actions.exportingSkillpack"));
     try {
       const result = await invoke<{ skillCount: number }>("export_skillpack", {
@@ -409,9 +423,11 @@ function App() {
         })),
         destination,
       });
+      setUtilityState("success");
       setUtilityMessage(t("actions.exportedSkillpack", { count: result.skillCount }));
     } catch (error) {
       console.error("export_skillpack failed", error);
+      setUtilityState("error");
       setUtilityMessage(
         isTauriBridgeUnavailable(error) ? t("errors.bridgeAction") : t("errors.exportFallback"),
       );
@@ -448,16 +464,48 @@ function App() {
     }
 
     setImportMessage("");
+    setUtilityState("success");
     setUtilityMessage(t("actions.importingSkillpack"));
     try {
       const result = await invoke<{ imported: number }>("import_skillpack", { packagePath });
+      setUtilityState("success");
       setUtilityMessage(t("actions.importedSkillpack", { count: result.imported }));
       await loadSkills();
     } catch (error) {
       console.error("import_skillpack failed", error);
+      setUtilityState("error");
       setUtilityMessage(
         isTauriBridgeUnavailable(error) ? t("errors.bridgeAction") : t("errors.importPackFallback"),
       );
+    }
+  }
+
+  async function importFromGithub() {
+    const url = githubUrl.trim();
+    if (!url || githubBusy) {
+      return;
+    }
+
+    setImportMessage("");
+    setUtilityState("success");
+    setUtilityMessage(t("actions.importingGithub"));
+    setGithubBusy(true);
+    try {
+      const result = await invoke<{ skillName: string }>("import_from_github", { url });
+      setUtilityState("success");
+      setUtilityMessage(t("actions.importedGithub", { skillName: result.skillName }));
+      setGithubUrl("");
+      await loadSkills();
+    } catch (error) {
+      console.error("import_from_github failed", error);
+      setUtilityState("error");
+      setUtilityMessage(
+        isTauriBridgeUnavailable(error)
+          ? t("errors.bridgeAction")
+          : t("errors.githubImportFailed", { reason: describeBackendError(error) }),
+      );
+    } finally {
+      setGithubBusy(false);
     }
   }
 
@@ -768,7 +816,34 @@ function App() {
                 {t("nav.import")}
               </button>
             </div>
-            {utilityMessage ? <StatusMessage state="success" message={utilityMessage} /> : null}
+            <form
+              className="github-import"
+              onSubmit={(event) => {
+                event.preventDefault();
+                void importFromGithub();
+              }}
+            >
+              <label className="github-import-label" htmlFor="github-import-url">
+                {t("workspace.packages.githubLabel")}
+              </label>
+              <div className="github-import-row">
+                <input
+                  id="github-import-url"
+                  type="url"
+                  className="github-import-input"
+                  placeholder="https://github.com/owner/repo/tree/main/skills/foo"
+                  value={githubUrl}
+                  onChange={(event) => setGithubUrl(event.target.value)}
+                  disabled={githubBusy}
+                />
+                <button type="submit" disabled={githubBusy || githubUrl.trim().length === 0}>
+                  <GitBranch size={17} strokeWidth={1.8} />
+                  {t("actions.importFromGithub")}
+                </button>
+              </div>
+              <p className="github-import-hint">{t("workspace.packages.githubHint")}</p>
+            </form>
+            {utilityMessage ? <StatusMessage state={utilityState} message={utilityMessage} /> : null}
           </WorkspacePanel>
         ) : null}
 
