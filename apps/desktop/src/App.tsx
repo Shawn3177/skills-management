@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { open, save } from "@tauri-apps/plugin-dialog";
-import { ArrowLeft, Boxes, Download, FolderInput, GitBranch, PackageOpen, RefreshCw, Search, Settings } from "lucide-react";
+import { ArrowLeft, ArrowRightLeft, Boxes, Download, FolderInput, GitBranch, LayoutGrid, RefreshCw, Search, Settings, ToggleRight } from "lucide-react";
 import "./App.css";
 import { LanguageSwitch } from "./components/LanguageSwitch";
 import {
@@ -31,9 +31,9 @@ import type { MessageKey } from "./i18n/messages";
 type SectionId = "skills" | "import" | "packages" | "settings";
 
 const sections = [
-  { id: "skills", key: "nav.skills", icon: Boxes },
-  { id: "import", key: "nav.imported", icon: FolderInput },
-  { id: "packages", key: "nav.packages", icon: PackageOpen },
+  { id: "skills", key: "nav.skills", icon: LayoutGrid },
+  { id: "import", key: "nav.imported", icon: ToggleRight },
+  { id: "packages", key: "nav.packages", icon: ArrowRightLeft },
   { id: "settings", key: "nav.settings", icon: Settings },
 ] satisfies Array<{ id: SectionId; key: MessageKey; icon: typeof Boxes }>;
 
@@ -837,7 +837,7 @@ function App() {
 
         {activeSection === "import" ? (
           <WorkspacePanel
-            icon={FolderInput}
+            icon={ToggleRight}
             label={t("regions.importWorkspace")}
             title={t("workspace.import.title")}
             body={t("workspace.import.body")}
@@ -930,7 +930,7 @@ function App() {
 
         {activeSection === "packages" ? (
           <WorkspacePanel
-            icon={PackageOpen}
+            icon={ArrowRightLeft}
             label={t("regions.packagesWorkspace")}
             title={t("workspace.packages.title")}
             body={t("workspace.packages.body")}
