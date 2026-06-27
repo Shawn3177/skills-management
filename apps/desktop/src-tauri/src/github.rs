@@ -15,6 +15,7 @@
 
 use crate::fs_ops::{default_data_root, is_safe_relative, unix_ms, SOURCE_MARKER_FILE};
 use crate::library::import_skill_to_library_with_root;
+use crate::targets;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io::{Cursor, Read};
@@ -132,14 +133,16 @@ pub fn import_from_github_with_root(
 
     let git_ref = match &parsed.ref_name {
         Some(reference) => reference.clone(),
-        None => resolve_default_branch(&agent, &parsed.owner, &parsed.repo)?,
+        None => resolve_default_branch(&agent, &parsed.owner, &parsed.repo)
+            .map_err(|error| error.message())?,
     };
 
     // Resolving the commit also validates that the subdir exists at this ref.
-    let synced_commit =
-        latest_commit(&agent, &parsed.owner, &parsed.repo, &git_ref, &parsed.subdir)?;
+    let synced_commit = latest_commit(&agent, &parsed.owner, &parsed.repo, &git_ref, &parsed.subdir)
+        .map_err(|error| error.message())?;
 
-    let zip_bytes = download_zipball(&agent, &parsed.owner, &parsed.repo, &git_ref)?;
+    let zip_bytes = download_zipball(&agent, &parsed.owner, &parsed.repo, &git_ref)
+        .map_err(|error| error.message())?;
 
     // Name the staging skill folder after the subdir's last segment (or repo) so
     // the library folder is derived from a meaningful name, not the staging id.
@@ -205,6 +208,331 @@ pub fn import_from_github_with_root(
     })
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SkillUpdateStatus {
+    pub library_path: String,
+    pub skill_name: String,
+    /// up-to-date | update-available | source-unavailable | rate-limited | error
+    pub state: String,
+    pub has_update: bool,
+    pub current: String,
+    pub latest: String,
+    pub url: String,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateResult {
+    pub skill_name: String,
+    pub library_path: String,
+    pub previous_commit: String,
+    pub new_commit: String,
+    pub refreshed_targets: Vec<String>,
+    pub failed_targets: Vec<String>,
+    pub message: String,
+}
+
+pub fn check_skill_updates() -> Result<Vec<SkillUpdateStatus>, String> {
+    let data_root = default_data_root()?;
+    check_skill_updates_with_root(&data_root)
+}
+
+pub fn check_skill_updates_with_root(data_root: &Path) -> Result<Vec<SkillUpdateStatus>, String> {
+    let library_root = data_root.join("library");
+    let mut sources: Vec<(PathBuf, GithubSource)> = Vec::new();
+    if library_root.is_dir() {
+        let entries = fs::read_dir(&library_root)
+            .map_err(|error| format!("Could not read the shared library: {error}"))?;
+        for entry in entries {
+            let entry = entry.map_err(|error| format!("Could not read a library entry: {error}"))?;
+            let dir = entry.path();
+            if dir.is_dir() {
+                if let Some(source) = read_source_file(&dir) {
+                    sources.push((dir, source));
+                }
+            }
+        }
+    }
+
+    let mut results = Vec::new();
+    if sources.is_empty() {
+        return Ok(results);
+    }
+
+    let agent = build_agent()?;
+    let mut rate_limited = false;
+    for (dir, source) in sources {
+        let skill_name = dir_skill_name(&dir);
+        let library_path = dir.display().to_string();
+        let current = short_sha(&source.synced_commit);
+
+        if rate_limited {
+            results.push(rate_limited_status(library_path, skill_name, current, source.url));
+            continue;
+        }
+
+        match latest_commit(&agent, &source.owner, &source.repo, &source.git_ref, &source.subdir) {
+            Ok(latest) => {
+                let has_update = latest != source.synced_commit;
+                results.push(SkillUpdateStatus {
+                    library_path,
+                    skill_name,
+                    state: if has_update { "update-available" } else { "up-to-date" }.to_string(),
+                    has_update,
+                    current,
+                    latest: short_sha(&latest),
+                    url: source.url,
+                    message: String::new(),
+                });
+            }
+            Err(GithubError::NotFound) => results.push(SkillUpdateStatus {
+                library_path,
+                skill_name,
+                state: "source-unavailable".to_string(),
+                has_update: false,
+                current,
+                latest: String::new(),
+                url: source.url,
+                message: "The source was not found on GitHub (it may have moved or been deleted)."
+                    .to_string(),
+            }),
+            Err(GithubError::RateLimited) => {
+                rate_limited = true;
+                results.push(rate_limited_status(library_path, skill_name, current, source.url));
+            }
+            Err(GithubError::Other(detail)) => results.push(SkillUpdateStatus {
+                library_path,
+                skill_name,
+                state: "error".to_string(),
+                has_update: false,
+                current,
+                latest: String::new(),
+                url: source.url,
+                message: detail,
+            }),
+        }
+    }
+
+    Ok(results)
+}
+
+fn rate_limited_status(
+    library_path: String,
+    skill_name: String,
+    current: String,
+    url: String,
+) -> SkillUpdateStatus {
+    SkillUpdateStatus {
+        library_path,
+        skill_name,
+        state: "rate-limited".to_string(),
+        has_update: false,
+        current,
+        latest: String::new(),
+        url,
+        message: GithubError::RateLimited.message(),
+    }
+}
+
+pub fn update_skill_from_github(library_path: String) -> Result<UpdateResult, String> {
+    let data_root = default_data_root()?;
+    let target_profiles = real_toggleable_targets()?;
+    update_skill_from_github_inner(Path::new(&library_path), &data_root, &target_profiles)
+}
+
+fn real_toggleable_targets() -> Result<Vec<(String, String, PathBuf)>, String> {
+    let mut profiles = Vec::new();
+    for id in targets::toggleable_target_ids() {
+        let root = targets::target_root_for(id)?;
+        let name = targets::target_name_for(id).unwrap_or(id).to_string();
+        profiles.push((id.to_string(), name, root));
+    }
+    Ok(profiles)
+}
+
+fn update_skill_from_github_inner(
+    library_path: &Path,
+    data_root: &Path,
+    target_profiles: &[(String, String, PathBuf)],
+) -> Result<UpdateResult, String> {
+    let library_root = data_root.join("library");
+    let library_canonical = library_root
+        .canonicalize()
+        .map_err(|error| format!("Could not read the shared library: {error}"))?;
+    let path_canonical = library_path
+        .canonicalize()
+        .map_err(|_| "Skill folder was not found in the shared library.".to_string())?;
+    if !path_canonical.starts_with(&library_canonical) {
+        return Err("Only shared-library skills can be updated.".to_string());
+    }
+
+    let source = read_source_file(library_path)
+        .ok_or_else(|| "This skill has no GitHub source to update from.".to_string())?;
+
+    let agent = build_agent()?;
+    let new_commit =
+        latest_commit(&agent, &source.owner, &source.repo, &source.git_ref, &source.subdir)
+            .map_err(|error| error.message())?;
+    let zip_bytes = download_zipball(&agent, &source.owner, &source.repo, &source.git_ref)
+        .map_err(|error| error.message())?;
+
+    let skill_name = dir_skill_name(library_path);
+    let staging_parent = unique_staging(data_root)?;
+    let staging_skill = staging_parent.join(&skill_name);
+
+    let prepared = (|| {
+        extract_subdir_from_zip(&zip_bytes, &source.subdir, &staging_skill)?;
+        if !staging_skill.join("SKILL.md").is_file() {
+            return Err(format!(
+                "No SKILL.md was found at '{}' in the repository.",
+                source.subdir
+            ));
+        }
+        Ok(())
+    })();
+    if let Err(error) = prepared {
+        let _ = fs::remove_dir_all(&staging_parent);
+        return Err(error);
+    }
+
+    let outcome = apply_skill_update(
+        library_path,
+        &staging_skill,
+        &source,
+        &new_commit,
+        data_root,
+        target_profiles,
+    );
+    let _ = fs::remove_dir_all(&staging_parent);
+    outcome
+}
+
+/// Replace the library skill in place with already-validated new content, then
+/// refresh any tool copies that were enabled. No network here, so it is unit
+/// tested directly. The previous library dir is soft-deleted to trash.
+fn apply_skill_update(
+    library_path: &Path,
+    new_skill_dir: &Path,
+    source: &GithubSource,
+    new_commit: &str,
+    data_root: &Path,
+    target_profiles: &[(String, String, PathBuf)],
+) -> Result<UpdateResult, String> {
+    let skill_name = dir_skill_name(library_path);
+    let previous_commit = source.synced_commit.clone();
+
+    // Which targets currently have this skill enabled? Capture before mutating.
+    let enabled: Vec<(String, String, PathBuf)> = target_profiles
+        .iter()
+        .filter(|(id, _name, root)| {
+            let managed = targets::managed_skill_dir(root, library_path);
+            managed.exists() && targets::is_managed_target_copy(&managed, library_path, id)
+        })
+        .cloned()
+        .collect();
+
+    // Write the refreshed source file into staging so the swap is atomic.
+    let updated_source = GithubSource {
+        synced_commit: new_commit.to_string(),
+        synced_at: unix_ms(),
+        ..source.clone()
+    };
+    write_source_file(new_skill_dir, &updated_source)?;
+
+    // Soft-delete the current copy, then move the new content into place.
+    let trash_path = unique_trash_path(data_root, &skill_name)?;
+    fs::rename(library_path, &trash_path)
+        .map_err(|error| format!("Could not move the current skill to trash: {error}"))?;
+    if let Err(error) = fs::rename(new_skill_dir, library_path) {
+        let _ = fs::rename(&trash_path, library_path);
+        return Err(format!("Could not install the updated skill: {error}"));
+    }
+
+    // Re-copy the new content into each tool that had it enabled. The library
+    // path is unchanged, so the markers still match: disable removes the stale
+    // copy, enable lays down the fresh one.
+    let mut refreshed_targets = Vec::new();
+    let mut failed_targets = Vec::new();
+    for (id, name, root) in &enabled {
+        let result =
+            targets::set_skill_target_enabled_with_root(library_path, id, false, data_root, root)
+                .and_then(|_| {
+                    targets::set_skill_target_enabled_with_root(
+                        library_path,
+                        id,
+                        true,
+                        data_root,
+                        root,
+                    )
+                });
+        match result {
+            Ok(_) => refreshed_targets.push(name.clone()),
+            Err(_) => failed_targets.push(name.clone()),
+        }
+    }
+
+    let message = if failed_targets.is_empty() {
+        format!("Updated {skill_name} to the latest version.")
+    } else {
+        format!(
+            "Updated {skill_name}, but could not refresh: {}.",
+            failed_targets.join(", ")
+        )
+    };
+
+    Ok(UpdateResult {
+        skill_name,
+        library_path: library_path.display().to_string(),
+        previous_commit: short_sha(&previous_commit),
+        new_commit: short_sha(new_commit),
+        refreshed_targets,
+        failed_targets,
+        message,
+    })
+}
+
+fn read_source_file(dir: &Path) -> Option<GithubSource> {
+    let contents = fs::read_to_string(dir.join(SOURCE_MARKER_FILE)).ok()?;
+    let source: GithubSource = serde_json::from_str(&contents).ok()?;
+    if source.kind == "github" {
+        Some(source)
+    } else {
+        None
+    }
+}
+
+fn dir_skill_name(dir: &Path) -> String {
+    dir.file_name()
+        .and_then(|value| value.to_str())
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or("skill")
+        .to_string()
+}
+
+fn short_sha(sha: &str) -> String {
+    sha.chars().take(7).collect()
+}
+
+fn unique_trash_path(data_root: &Path, skill_name: &str) -> Result<PathBuf, String> {
+    let trash_root = data_root.join("trash");
+    fs::create_dir_all(&trash_root)
+        .map_err(|error| format!("Could not create the trash folder: {error}"))?;
+    for index in 0.. {
+        let suffix = if index == 0 {
+            String::new()
+        } else {
+            format!("-{index}")
+        };
+        let candidate = trash_root.join(format!("library-{skill_name}-{}{suffix}", unix_ms()));
+        if !candidate.exists() {
+            return Ok(candidate);
+        }
+    }
+    unreachable!("unbounded trash index should always find an available folder")
+}
+
 fn build_agent() -> Result<ureq::Agent, String> {
     let connector =
         native_tls::TlsConnector::new().map_err(|error| format!("Could not initialize TLS: {error}"))?;
@@ -215,13 +543,19 @@ fn build_agent() -> Result<ureq::Agent, String> {
         .build())
 }
 
-fn resolve_default_branch(agent: &ureq::Agent, owner: &str, repo: &str) -> Result<String, String> {
+fn resolve_default_branch(
+    agent: &ureq::Agent,
+    owner: &str,
+    repo: &str,
+) -> Result<String, GithubError> {
     let url = format!("https://api.github.com/repos/{owner}/{repo}");
     let json = api_get_json(agent, &url)?;
     json.get("default_branch")
         .and_then(|value| value.as_str())
         .map(|value| value.to_string())
-        .ok_or_else(|| "Could not determine the repository's default branch.".to_string())
+        .ok_or_else(|| {
+            GithubError::Other("Could not determine the repository's default branch.".to_string())
+        })
 }
 
 fn latest_commit(
@@ -230,7 +564,7 @@ fn latest_commit(
     repo: &str,
     git_ref: &str,
     subdir: &str,
-) -> Result<String, String> {
+) -> Result<String, GithubError> {
     let mut url = format!(
         "https://api.github.com/repos/{owner}/{repo}/commits?per_page=1&sha={}",
         encode_query(git_ref)
@@ -242,19 +576,20 @@ fn latest_commit(
     let json = api_get_json(agent, &url)?;
     let commits = json
         .as_array()
-        .ok_or_else(|| "Unexpected response from GitHub commits API.".to_string())?;
+        .ok_or_else(|| GithubError::Other("Unexpected response from GitHub commits API.".to_string()))?;
     let first = commits.first().ok_or_else(|| {
         if subdir.is_empty() {
-            "The repository has no commits.".to_string()
+            GithubError::Other("The repository has no commits.".to_string())
         } else {
-            format!("Path '{subdir}' was not found in the repository.")
+            // An empty path-filtered history means the subdir is gone at this ref.
+            GithubError::NotFound
         }
     })?;
     first
         .get("sha")
         .and_then(|value| value.as_str())
         .map(|value| value.to_string())
-        .ok_or_else(|| "GitHub commit response was missing a sha.".to_string())
+        .ok_or_else(|| GithubError::Other("GitHub commit response was missing a sha.".to_string()))
 }
 
 fn download_zipball(
@@ -262,58 +597,93 @@ fn download_zipball(
     owner: &str,
     repo: &str,
     git_ref: &str,
-) -> Result<Vec<u8>, String> {
+) -> Result<Vec<u8>, GithubError> {
     let url = format!("https://codeload.github.com/{owner}/{repo}/zip/{git_ref}");
     let response = agent
         .get(&url)
         .set("User-Agent", USER_AGENT)
         .call()
-        .map_err(describe_ureq_error)?;
+        .map_err(classify_ureq_error)?;
 
     let mut buffer = Vec::new();
     response
         .into_reader()
         .take(MAX_DOWNLOAD_BYTES + 1)
         .read_to_end(&mut buffer)
-        .map_err(|error| format!("Could not download the repository archive: {error}"))?;
+        .map_err(|error| {
+            GithubError::Other(format!("Could not download the repository archive: {error}"))
+        })?;
 
     if buffer.is_empty() {
-        return Err("The downloaded repository archive was empty.".to_string());
+        return Err(GithubError::Other(
+            "The downloaded repository archive was empty.".to_string(),
+        ));
     }
     if buffer.len() as u64 > MAX_DOWNLOAD_BYTES {
-        return Err("The repository archive is too large to import.".to_string());
+        return Err(GithubError::Other(
+            "The repository archive is too large to import.".to_string(),
+        ));
     }
     Ok(buffer)
 }
 
-fn api_get_json(agent: &ureq::Agent, url: &str) -> Result<serde_json::Value, String> {
+fn api_get_json(agent: &ureq::Agent, url: &str) -> Result<serde_json::Value, GithubError> {
     let response = agent
         .get(url)
         .set("User-Agent", USER_AGENT)
         .set("Accept", "application/vnd.github+json")
         .set("X-GitHub-Api-Version", "2022-11-28")
         .call()
-        .map_err(describe_ureq_error)?;
+        .map_err(classify_ureq_error)?;
     let body = response
         .into_string()
-        .map_err(|error| format!("Could not read the GitHub response: {error}"))?;
-    serde_json::from_str(&body).map_err(|error| format!("Could not parse the GitHub response: {error}"))
+        .map_err(|error| GithubError::Other(format!("Could not read the GitHub response: {error}")))?;
+    serde_json::from_str(&body)
+        .map_err(|error| GithubError::Other(format!("Could not parse the GitHub response: {error}")))
 }
 
-fn describe_ureq_error(error: ureq::Error) -> String {
+/// Classified failure from a GitHub request, so callers can distinguish a
+/// missing/moved source and a rate limit from a generic error.
+#[derive(Debug)]
+enum GithubError {
+    NotFound,
+    RateLimited,
+    Other(String),
+}
+
+impl GithubError {
+    fn message(&self) -> String {
+        match self {
+            GithubError::NotFound => {
+                "Repository or path not found. Only public repositories are supported.".to_string()
+            }
+            GithubError::RateLimited => {
+                "GitHub's hourly rate limit was reached. Try again later.".to_string()
+            }
+            GithubError::Other(detail) => detail.clone(),
+        }
+    }
+}
+
+fn classify_ureq_error(error: ureq::Error) -> GithubError {
     match error {
         ureq::Error::Status(code, response) => match code {
-            404 => "Repository or path not found. Only public repositories are supported.".to_string(),
+            404 => GithubError::NotFound,
             401 | 403 => {
                 if response.header("x-ratelimit-remaining") == Some("0") {
-                    "GitHub's hourly rate limit was reached. Try again later.".to_string()
+                    GithubError::RateLimited
                 } else {
-                    "GitHub denied the request. Only public repositories are supported.".to_string()
+                    GithubError::Other(
+                        "GitHub denied the request. Only public repositories are supported."
+                            .to_string(),
+                    )
                 }
             }
-            _ => format!("GitHub returned an unexpected status ({code})."),
+            _ => GithubError::Other(format!("GitHub returned an unexpected status ({code}).")),
         },
-        ureq::Error::Transport(transport) => format!("Network error reaching GitHub: {transport}"),
+        ureq::Error::Transport(transport) => {
+            GithubError::Other(format!("Network error reaching GitHub: {transport}"))
+        }
     }
 }
 
@@ -597,6 +967,117 @@ mod tests {
     fn encodes_query_values() {
         assert_eq!(encode_query("skills/foo bar"), "skills/foo%20bar");
         assert_eq!(encode_query("main"), "main");
+    }
+
+    fn sample_source() -> GithubSource {
+        GithubSource {
+            kind: "github".to_string(),
+            owner: "o".to_string(),
+            repo: "r".to_string(),
+            git_ref: "main".to_string(),
+            subdir: "skills/foo".to_string(),
+            synced_commit: "old1111111111111111111111111111111111111".to_string(),
+            synced_at: 1,
+            url: "https://github.com/o/r/tree/main/skills/foo".to_string(),
+        }
+    }
+
+    #[test]
+    fn apply_update_replaces_library_and_refreshes_enabled_target() {
+        let data_root = unique_temp_dir("apply-update");
+        let library = data_root.join("library").join("foo");
+        fs::create_dir_all(&library).unwrap();
+        fs::write(library.join("SKILL.md"), "# old\n").unwrap();
+        let source = sample_source();
+        write_source_file(&library, &source).unwrap();
+
+        // Enable for codex using a temp target root, then confirm the old copy.
+        let codex_root = data_root.join("codex-root");
+        crate::targets::set_skill_target_enabled_with_root(
+            &library, "codex", true, &data_root, &codex_root,
+        )
+        .unwrap();
+        assert_eq!(
+            fs::read_to_string(codex_root.join("foo").join("SKILL.md")).unwrap(),
+            "# old\n"
+        );
+
+        // Build new validated content in a staging dir.
+        let staging = unique_temp_dir("apply-update-staging");
+        let new_skill = staging.join("foo");
+        fs::create_dir_all(&new_skill).unwrap();
+        fs::write(new_skill.join("SKILL.md"), "# NEW\n").unwrap();
+
+        let profiles = vec![("codex".to_string(), "Codex".to_string(), codex_root.clone())];
+        let result = apply_skill_update(
+            &library,
+            &new_skill,
+            &source,
+            "new2222222222222222222222222222222222222",
+            &data_root,
+            &profiles,
+        )
+        .unwrap();
+
+        // Library replaced in place.
+        assert_eq!(fs::read_to_string(library.join("SKILL.md")).unwrap(), "# NEW\n");
+        // Source metadata bumped to the new commit.
+        assert_eq!(
+            read_source_file(&library).unwrap().synced_commit,
+            "new2222222222222222222222222222222222222"
+        );
+        // The enabled tool copy was refreshed with the new content.
+        assert_eq!(
+            fs::read_to_string(codex_root.join("foo").join("SKILL.md")).unwrap(),
+            "# NEW\n"
+        );
+        assert_eq!(result.refreshed_targets, vec!["Codex".to_string()]);
+        assert!(result.failed_targets.is_empty());
+        assert_eq!(result.new_commit, "new2222");
+
+        fs::remove_dir_all(&data_root).unwrap();
+        let _ = fs::remove_dir_all(&staging);
+    }
+
+    #[test]
+    fn apply_update_leaves_unenabled_skill_with_no_tool_copies() {
+        let data_root = unique_temp_dir("apply-update-disabled");
+        let library = data_root.join("library").join("solo");
+        fs::create_dir_all(&library).unwrap();
+        fs::write(library.join("SKILL.md"), "# old\n").unwrap();
+        let source = sample_source();
+        write_source_file(&library, &source).unwrap();
+
+        let staging = unique_temp_dir("apply-update-disabled-staging");
+        let new_skill = staging.join("solo");
+        fs::create_dir_all(&new_skill).unwrap();
+        fs::write(new_skill.join("SKILL.md"), "# NEW\n").unwrap();
+
+        let codex_root = data_root.join("codex-root");
+        let profiles = vec![("codex".to_string(), "Codex".to_string(), codex_root)];
+        let result =
+            apply_skill_update(&library, &new_skill, &source, "abc1234def", &data_root, &profiles)
+                .unwrap();
+
+        assert_eq!(fs::read_to_string(library.join("SKILL.md")).unwrap(), "# NEW\n");
+        assert!(result.refreshed_targets.is_empty());
+        assert!(result.failed_targets.is_empty());
+
+        fs::remove_dir_all(&data_root).unwrap();
+        let _ = fs::remove_dir_all(&staging);
+    }
+
+    #[test]
+    fn check_returns_empty_without_github_sources() {
+        let data_root = unique_temp_dir("check-empty");
+        let plain = data_root.join("library").join("plain");
+        fs::create_dir_all(&plain).unwrap();
+        fs::write(plain.join("SKILL.md"), "# plain\n").unwrap();
+
+        let results = check_skill_updates_with_root(&data_root).unwrap();
+        assert!(results.is_empty());
+
+        fs::remove_dir_all(&data_root).unwrap();
     }
 
     // Exercises the live network path (TLS, GitHub API, codeload download, zip

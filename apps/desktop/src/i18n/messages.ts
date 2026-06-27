@@ -46,6 +46,14 @@ export type MessageKey =
   | "actions.importFromGithub"
   | "actions.importingGithub"
   | "actions.importedGithub"
+  | "actions.checkUpdates"
+  | "actions.checkingUpdates"
+  | "actions.updatesFound"
+  | "actions.noUpdates"
+  | "actions.updateSelected"
+  | "actions.updatingSkills"
+  | "actions.updatedSkills"
+  | "actions.updatedSkillsPartial"
   | "actions.exportLibraryEmpty"
   | "actions.enable"
   | "actions.disable"
@@ -89,6 +97,13 @@ export type MessageKey =
   | "workspace.packages.body"
   | "workspace.packages.githubLabel"
   | "workspace.packages.githubHint"
+  | "workspace.packages.updatesLabel"
+  | "workspace.packages.noGithubSkills"
+  | "updates.available"
+  | "updates.upToDate"
+  | "updates.unavailable"
+  | "updates.rateLimited"
+  | "updates.error"
   | "workspace.settings.title"
   | "workspace.settings.body"
   | "workspace.settings.backupValue"
@@ -159,6 +174,14 @@ export const messages: Record<Locale, Record<MessageKey, string>> = {
     "actions.importFromGithub": "从 GitHub 导入",
     "actions.importingGithub": "正在从 GitHub 导入…",
     "actions.importedGithub": "已从 GitHub 导入 {skillName}。",
+    "actions.checkUpdates": "检查更新",
+    "actions.checkingUpdates": "正在检查更新…",
+    "actions.updatesFound": "发现 {count} 个可更新的技能。",
+    "actions.noUpdates": "所有技能都是最新的。",
+    "actions.updateSelected": "更新所选（{count}）",
+    "actions.updatingSkills": "正在更新…",
+    "actions.updatedSkills": "已更新 {count} 个技能。",
+    "actions.updatedSkillsPartial": "已更新 {count} 个技能，{failed} 个失败。",
     "actions.exportLibraryEmpty": "共享库为空，没有可导出的技能。",
     "actions.enable": "启用",
     "actions.disable": "停用",
@@ -202,6 +225,13 @@ export const messages: Record<Locale, Record<MessageKey, string>> = {
     "workspace.packages.body": "导入和导出 .skillpack：把共享库打包带到另一台电脑，或导入已有的技能包。",
     "workspace.packages.githubLabel": "从 GitHub 导入技能",
     "workspace.packages.githubHint": "粘贴公开仓库地址，或指向某个技能文件夹的 /tree/<分支>/<子目录> 地址。仅支持公开仓库。",
+    "workspace.packages.updatesLabel": "检查 GitHub 更新",
+    "workspace.packages.noGithubSkills": "还没有从 GitHub 导入的技能。",
+    "updates.available": "有更新",
+    "updates.upToDate": "最新",
+    "updates.unavailable": "来源失效",
+    "updates.rateLimited": "已限流",
+    "updates.error": "出错",
     "workspace.settings.title": "本地设置",
     "workspace.settings.body": "查看数据目录、备份策略和包格式。写入类设置会在后端安全策略完成后开放。",
     "workspace.settings.backupValue": "托管写入前备份",
@@ -269,6 +299,14 @@ export const messages: Record<Locale, Record<MessageKey, string>> = {
     "actions.importFromGithub": "Import from GitHub",
     "actions.importingGithub": "Importing from GitHub…",
     "actions.importedGithub": "Imported {skillName} from GitHub.",
+    "actions.checkUpdates": "Check for updates",
+    "actions.checkingUpdates": "Checking for updates…",
+    "actions.updatesFound": "{count} skill(s) have updates.",
+    "actions.noUpdates": "All skills are up to date.",
+    "actions.updateSelected": "Update selected ({count})",
+    "actions.updatingSkills": "Updating…",
+    "actions.updatedSkills": "Updated {count} skill(s).",
+    "actions.updatedSkillsPartial": "Updated {count} skill(s), {failed} failed.",
     "actions.exportLibraryEmpty": "The shared library has no skills to export.",
     "actions.enable": "Enable",
     "actions.disable": "Disable",
@@ -312,6 +350,13 @@ export const messages: Record<Locale, Record<MessageKey, string>> = {
     "workspace.packages.body": "Import and export .skillpack bundles: pack your shared library to move it to another machine, or import an existing bundle.",
     "workspace.packages.githubLabel": "Import a skill from GitHub",
     "workspace.packages.githubHint": "Paste a public repo URL, or a /tree/<branch>/<subdir> URL pointing at a skill folder. Public repositories only.",
+    "workspace.packages.updatesLabel": "Check for GitHub updates",
+    "workspace.packages.noGithubSkills": "No skills imported from GitHub yet.",
+    "updates.available": "Update available",
+    "updates.upToDate": "Up to date",
+    "updates.unavailable": "Source unavailable",
+    "updates.rateLimited": "Rate limited",
+    "updates.error": "Error",
     "workspace.settings.title": "Local settings",
     "workspace.settings.body": "Review the data root, backup policy, and package format. Writeable settings open after the backend safety path is ready.",
     "workspace.settings.backupValue": "Back up before managed writes",

@@ -154,6 +154,26 @@ pub fn is_managed_target_copy(target_dir: &Path, source_path: &Path, target_id: 
     marker_matches(target_dir, &source_canonical, target_id)
 }
 
+/// Target ids that support real enable/disable (VS Code is still pending).
+pub fn toggleable_target_ids() -> &'static [&'static str] {
+    &["codex", "claude-code"]
+}
+
+/// The real, home-based skills-folder root for a toggleable target.
+pub fn target_root_for(target_id: &str) -> Result<PathBuf, String> {
+    Ok(target_profile(target_id)?.root)
+}
+
+/// The display name for a target id, when it is a supported target.
+pub fn target_name_for(target_id: &str) -> Option<&'static str> {
+    target_profile(target_id).ok().map(|target| target.name)
+}
+
+/// Where a given library skill's managed copy lives under `target_root`.
+pub fn managed_skill_dir(target_root: &Path, library_path: &Path) -> PathBuf {
+    target_root.join(skill_folder_name(library_path))
+}
+
 fn enable_target_copy(
     source_canonical: &Path,
     source_path: &Path,
