@@ -3,17 +3,20 @@ import {
   Archive,
   Boxes,
   CheckCircle2,
+  ChevronDown,
   CircleAlert,
   CircleX,
   Download,
   FolderInput,
+  GitFork,
   Package,
   Puzzle,
   ShieldCheck,
 } from "lucide-react";
 import type { MessageKey } from "../i18n/messages";
 import type { TFunction } from "../i18n/useLocale";
-import type { SkillHealth, SkillOriginKind, SkillRecord } from "../lib/skills";
+import { isImportableSkill } from "../lib/skills";
+import type { RepositoryIdentity, SkillHealth, SkillOriginKind, SkillRecord } from "../lib/skills";
 
 export type ImportState = "idle" | "importing" | "success" | "error";
 export type TargetActionState = "idle" | "saving" | "success" | "error";
@@ -32,12 +35,14 @@ export const healthIcons = {
 
 export const originLabelKeys: Record<SkillOriginKind, MessageKey> = {
   standalone: "origin.standalone",
+  collection: "origin.collection",
   plugin: "origin.plugin",
   system: "origin.system",
 };
 
 export const originIcons = {
   standalone: Package,
+  collection: GitFork,
   plugin: Puzzle,
   system: ShieldCheck,
 };
@@ -45,7 +50,15 @@ export const originIcons = {
 export function getSkillOriginLabel(skill: SkillRecord, t: TFunction) {
   const kindLabel = t(originLabelKeys[skill.origin.kind]);
 
-  return skill.origin.plugin ? skill.origin.plugin.name + " · " + kindLabel : kindLabel;
+  if (skill.origin.plugin) {
+    return `${skill.origin.plugin.name} · ${kindLabel}`;
+  }
+
+  if (skill.origin.repository) {
+    return `${skill.origin.repository.name} · ${kindLabel}`;
+  }
+
+  return kindLabel;
 }
 
 export const toggleableTargets = [
@@ -59,6 +72,49 @@ export function hasSource(skill: SkillRecord, source: string) {
     .split(",")
     .map((entry) => entry.trim())
     .includes(source);
+}
+
+export function SkillCollectionGroup({
+  repository,
+  skillCount,
+  expanded,
+  onToggle,
+  children,
+  t,
+}: {
+  repository: RepositoryIdentity;
+  skillCount: number;
+  expanded: boolean;
+  onToggle: () => void;
+  children: ReactNode;
+  t: TFunction;
+}) {
+  const actionLabel = t(expanded ? "actions.collapseCollection" : "actions.expandCollection", {
+    name: repository.name,
+  });
+
+  return (
+    <section className={`skill-collection ${expanded ? "expanded" : ""}`} aria-label={repository.name}>
+      <button
+        className="skill-collection-header"
+        type="button"
+        aria-expanded={expanded}
+        aria-label={actionLabel}
+        onClick={onToggle}
+      >
+        <span className="skill-collection-icon">
+          <GitFork size={18} strokeWidth={1.8} aria-hidden="true" />
+        </span>
+        <span className="skill-collection-main">
+          <strong>{repository.name}</strong>
+          <span>{repository.url ?? t("collection.localSource")}</span>
+        </span>
+        <span className="skill-collection-count">{t("collection.skillCount", { count: skillCount })}</span>
+        <ChevronDown className="skill-collection-chevron" size={18} strokeWidth={1.8} aria-hidden="true" />
+      </button>
+      {expanded ? <div className="skill-collection-items">{children}</div> : null}
+    </section>
+  );
 }
 
 export function SkillListItem({
@@ -175,7 +231,7 @@ export function SkillDetail({
   const Icon = healthIcons[skill.health];
   const originKindLabel = t(originLabelKeys[skill.origin.kind]);
   const importLabel =
-    skill.origin.kind !== "standalone"
+    !isImportableSkill(skill)
       ? t("actions.managedByCodex")
       : hasSource(skill, "Shared Library")
       ? t("actions.alreadyInLibrary")
@@ -218,6 +274,20 @@ export function SkillDetail({
                 <dt>{t("detail.publisher")}</dt>
                 <dd>{skill.origin.plugin.publisher}</dd>
               </div>
+            </>
+          ) : null}
+          {skill.origin.repository ? (
+            <>
+              <div>
+                <dt>{t("detail.repository")}</dt>
+                <dd>{skill.origin.repository.name}</dd>
+              </div>
+              {skill.origin.repository.url ? (
+                <div>
+                  <dt>{t("detail.repositoryUrl")}</dt>
+                  <dd>{skill.origin.repository.url}</dd>
+                </div>
+              ) : null}
             </>
           ) : null}
           <div>

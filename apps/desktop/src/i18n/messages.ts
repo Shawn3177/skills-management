@@ -37,6 +37,8 @@ export type MessageKey =
   | "actions.alreadyInLibrary"
   | "actions.managedByCodex"
   | "actions.backToSkills"
+  | "actions.expandCollection"
+  | "actions.collapseCollection"
   | "actions.repair"
   | "actions.exportSkillpack"
   | "actions.repairPreview"
@@ -113,6 +115,7 @@ export type MessageKey =
   | "health.broken"
   | "drawer.selectedSkill"
   | "origin.standalone"
+  | "origin.collection"
   | "origin.plugin"
   | "origin.system"
   | "detail.metadata"
@@ -120,6 +123,10 @@ export type MessageKey =
   | "detail.plugin"
   | "detail.version"
   | "detail.publisher"
+  | "detail.repository"
+  | "detail.repositoryUrl"
+  | "collection.skillCount"
+  | "collection.localSource"
   | "detail.source"
   | "detail.path"
   | "detail.supportFiles"
@@ -173,6 +180,8 @@ export const messages: Record<Locale, Record<MessageKey, string>> = {
     "actions.alreadyInLibrary": "已在共享库",
     "actions.managedByCodex": "由 Codex 管理",
     "actions.backToSkills": "返回技能列表",
+    "actions.expandCollection": "展开 {name}",
+    "actions.collapseCollection": "收起 {name}",
     "actions.repair": "修复",
     "actions.exportSkillpack": "导出 .skillpack",
     "actions.repairPreview": "{skillName} 的修复检查正在等待后端接入。",
@@ -249,6 +258,7 @@ export const messages: Record<Locale, Record<MessageKey, string>> = {
     "health.broken": "损坏",
     "drawer.selectedSkill": "已选择技能",
     "origin.standalone": "独立 Skill",
+    "origin.collection": "仓库合集",
     "origin.plugin": "插件 Skill",
     "origin.system": "系统 Skill",
     "detail.metadata": "元数据",
@@ -256,6 +266,10 @@ export const messages: Record<Locale, Record<MessageKey, string>> = {
     "detail.plugin": "所属插件",
     "detail.version": "版本",
     "detail.publisher": "开发者",
+    "detail.repository": "来源仓库",
+    "detail.repositoryUrl": "仓库地址",
+    "collection.skillCount": "{count} 个 Skill",
+    "collection.localSource": "本地仓库合集",
     "detail.source": "来源",
     "detail.path": "路径",
     "detail.supportFiles": "支持文件",
@@ -306,6 +320,8 @@ export const messages: Record<Locale, Record<MessageKey, string>> = {
     "actions.alreadyInLibrary": "Already in library",
     "actions.managedByCodex": "Managed by Codex",
     "actions.backToSkills": "Back to skills",
+    "actions.expandCollection": "Expand {name}",
+    "actions.collapseCollection": "Collapse {name}",
     "actions.repair": "Repair",
     "actions.exportSkillpack": "Export .skillpack",
     "actions.repairPreview": "Repair checks for {skillName} are waiting for the repair backend.",
@@ -382,6 +398,7 @@ export const messages: Record<Locale, Record<MessageKey, string>> = {
     "health.broken": "Broken",
     "drawer.selectedSkill": "Selected skill",
     "origin.standalone": "Standalone skill",
+    "origin.collection": "Repository collection",
     "origin.plugin": "Plugin skill",
     "origin.system": "System skill",
     "detail.metadata": "Metadata",
@@ -389,6 +406,10 @@ export const messages: Record<Locale, Record<MessageKey, string>> = {
     "detail.plugin": "Plugin",
     "detail.version": "Version",
     "detail.publisher": "Publisher",
+    "detail.repository": "Repository",
+    "detail.repositoryUrl": "Repository URL",
+    "collection.skillCount": "{count} skills",
+    "collection.localSource": "Local repository collection",
     "detail.source": "Source",
     "detail.path": "Path",
     "detail.supportFiles": "Support files",

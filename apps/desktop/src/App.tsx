@@ -7,6 +7,7 @@ import { LanguageSwitch } from "./components/LanguageSwitch";
 import {
   hasSource,
   healthIcons,
+  SkillCollectionGroup,
   SkillDetail,
   SkillListItem,
   StatusMessage,
@@ -23,6 +24,8 @@ import {
   filterSkills,
   getSkillStats,
   getSkillUsageLabels,
+  groupSkillsForList,
+  isImportableSkill,
   mergeSameNamedSkills,
   type SkillRecord,
 } from "./lib/skills";
@@ -128,6 +131,7 @@ function App() {
   const [query, setQuery] = useState("");
   const [skills, setSkills] = useState<SkillRecord[]>([]);
   const [selectedId, setSelectedId] = useState("");
+  const [expandedCollections, setExpandedCollections] = useState<Set<string>>(new Set());
   const [detailOpen, setDetailOpen] = useState(false);
   const [scanState, setScanState] = useState<ScanState>("scanning");
   const [importState, setImportState] = useState<ImportState>("idle");
@@ -152,18 +156,19 @@ function App() {
   const allImportCandidates = useMemo(
     () =>
       mergeSameNamedSkills(skills).filter(
-        (skill) => skill.origin.kind === "standalone" && !hasSource(skill, "Shared Library"),
+        (skill) => isImportableSkill(skill) && !hasSource(skill, "Shared Library"),
       ),
     [skills],
   );
   const usingFallback = scanState === "ready" && skills.length === 0;
   const filteredSkills = useMemo(() => filterSkills(groupedSkills, query), [groupedSkills, query]);
+  const skillListGroups = useMemo(() => groupSkillsForList(filteredSkills), [filteredSkills]);
   const selectedSkill = filteredSkills.find((skill) => skill.id === selectedId) ?? filteredSkills[0];
   const importedSkills = filteredSkills.filter((skill) => hasSource(skill, "Shared Library"));
   const stats = useMemo(() => getSkillStats(groupedSkills), [groupedSkills]);
   const importDisabled =
     !selectedSkill ||
-    selectedSkill.origin.kind !== "standalone" ||
+    !isImportableSkill(selectedSkill) ||
     hasSource(selectedSkill, "Shared Library") ||
     scanState === "scanning" ||
     importState === "importing" ||
@@ -316,7 +321,7 @@ function App() {
   async function importSkill(skill: SkillRecord | undefined) {
     if (
       !skill ||
-      skill.origin.kind !== "standalone" ||
+      !isImportableSkill(skill) ||
       hasSource(skill, "Shared Library") ||
       scanState === "scanning" ||
       importState === "importing"
@@ -410,6 +415,31 @@ function App() {
     setActiveSection(sectionId);
     setDetailOpen(false);
     setUtilityMessage("");
+  }
+
+  function toggleCollection(collectionId: string) {
+    setExpandedCollections((current) => {
+      const next = new Set(current);
+      if (next.has(collectionId)) {
+        next.delete(collectionId);
+      } else {
+        next.add(collectionId);
+      }
+      return next;
+    });
+  }
+
+  function renderSkillListItem(skill: SkillRecord) {
+    return (
+      <SkillListItem
+        key={skill.id}
+        skill={skill}
+        selected={skill.id === selectedId}
+        onSelect={() => openSkillDetail(skill.id)}
+        usageLabels={getSkillUsageLabels(skill)}
+        t={t}
+      />
+    );
   }
 
   function openSkillDetail(skillId: string) {
@@ -826,16 +856,22 @@ function App() {
               ref={skillListRef}
               tabIndex={-1}
             >
-              {filteredSkills.map((skill) => (
-                <SkillListItem
-                  key={skill.id}
-                  skill={skill}
-                  selected={skill.id === selectedId}
-                  onSelect={() => openSkillDetail(skill.id)}
-                  usageLabels={getSkillUsageLabels(skill)}
-                  t={t}
-                />
-              ))}
+              {skillListGroups.map((group) =>
+                group.repository && group.skills.length > 1 ? (
+                  <SkillCollectionGroup
+                    key={group.id}
+                    repository={group.repository}
+                    skillCount={group.skills.length}
+                    expanded={query.trim().length > 0 || expandedCollections.has(group.id)}
+                    onToggle={() => toggleCollection(group.id)}
+                    t={t}
+                  >
+                    {group.skills.map(renderSkillListItem)}
+                  </SkillCollectionGroup>
+                ) : (
+                  group.skills.map(renderSkillListItem)
+                ),
+              )}
               {filteredSkills.length === 0 ? (
                 <div className="empty-state">
                   <p>{t("status.empty.title")}</p>

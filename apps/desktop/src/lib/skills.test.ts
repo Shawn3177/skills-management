@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { filterSkills, getSkillStats, mergeSameNamedSkills, type SkillRecord } from "./skills";
+import {
+  filterSkills,
+  getSkillStats,
+  groupSkillsForList,
+  isImportableSkill,
+  mergeSameNamedSkills,
+  type SkillRecord,
+} from "./skills";
 
 const records: SkillRecord[] = [
   {
@@ -45,6 +52,39 @@ const pluginRecord: SkillRecord = {
   },
 };
 
+const collectionRecords: SkillRecord[] = [
+  {
+    ...records[0],
+    id: "collection:local/anthropic-agent-skills/algorithmic-art",
+    name: "algorithmic-art",
+    sourcePath: "C:/Users/example/.codex/skills-main/skills/algorithmic-art",
+    origin: {
+      kind: "collection",
+      plugin: null,
+      repository: {
+        id: "local/anthropic-agent-skills",
+        name: "anthropic-agent-skills",
+        url: null,
+      },
+    },
+  },
+  {
+    ...records[0],
+    id: "collection:local/anthropic-agent-skills/canvas-design",
+    name: "canvas-design",
+    sourcePath: "C:/Users/example/.codex/skills-main/skills/canvas-design",
+    origin: {
+      kind: "collection",
+      plugin: null,
+      repository: {
+        id: "local/anthropic-agent-skills",
+        name: "anthropic-agent-skills",
+        url: null,
+      },
+    },
+  },
+];
+
 describe("filterSkills", () => {
   it("matches name, description, source, and path without case sensitivity", () => {
     expect(filterSkills(records, "WORKFLOW")).toHaveLength(1);
@@ -52,6 +92,7 @@ describe("filterSkills", () => {
     expect(filterSkills(records, ".codex")).toHaveLength(1);
     expect(filterSkills([...records, pluginRecord], "github")).toEqual([pluginRecord]);
     expect(filterSkills([...records, pluginRecord], "0.1.8")).toEqual([pluginRecord]);
+    expect(filterSkills(collectionRecords, "anthropic-agent-skills")).toEqual(collectionRecords);
   });
 
   it("returns all records for a blank query", () => {
@@ -67,6 +108,22 @@ describe("getSkillStats", () => {
       warnings: 1,
       enabledTargets: 1,
     });
+  });
+});
+
+describe("groupSkillsForList", () => {
+  it("collapses records from one repository into one list group", () => {
+    const groups = groupSkillsForList([records[0], ...collectionRecords]);
+
+    expect(groups).toHaveLength(2);
+    expect(groups[0].repository).toBeNull();
+    expect(groups[1].repository?.name).toBe("anthropic-agent-skills");
+    expect(groups[1].skills.map((skill) => skill.name)).toEqual(["algorithmic-art", "canvas-design"]);
+  });
+
+  it("allows collection skills to be imported without treating plugins as standalone", () => {
+    expect(isImportableSkill(collectionRecords[0])).toBe(true);
+    expect(isImportableSkill(pluginRecord)).toBe(false);
   });
 });
 

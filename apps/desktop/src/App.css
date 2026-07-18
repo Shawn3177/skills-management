@@ -30,6 +30,9 @@
   --origin-standalone-bg: #f3f4f6;
   --origin-standalone-border: #d1d5db;
   --origin-standalone-text: #374151;
+  --origin-collection-bg: #eff6ff;
+  --origin-collection-border: #bfdbfe;
+  --origin-collection-text: #1e40af;
   --origin-plugin-bg: #ecfdf5;
   --origin-plugin-border: #a7f3d0;
   --origin-plugin-text: #065f46;
@@ -340,6 +343,90 @@ button:disabled {
   padding: 10px 12px;
 }
 
+.skill-collection {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.skill-collection-header {
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr) auto 24px;
+  gap: 10px;
+  align-items: center;
+  width: 100%;
+  min-height: 56px;
+  padding: 8px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #f8fafc;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+
+.skill-collection-header:hover {
+  border-color: var(--line-strong);
+  background: #f3f6fa;
+}
+
+.skill-collection-icon {
+  display: grid;
+  width: 32px;
+  height: 32px;
+  place-items: center;
+  border: 1px solid var(--origin-collection-border);
+  border-radius: 6px;
+  background: var(--origin-collection-bg);
+  color: var(--origin-collection-text);
+}
+
+.skill-collection-main {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.skill-collection-main strong,
+.skill-collection-main span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.skill-collection-main strong {
+  font-size: 14px;
+}
+
+.skill-collection-main span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.skill-collection-count {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.skill-collection-chevron {
+  color: var(--muted);
+  transition: transform 160ms ease;
+}
+
+.skill-collection.expanded .skill-collection-chevron {
+  transform: rotate(180deg);
+}
+
+.skill-collection-items {
+  display: grid;
+  gap: 6px;
+  margin-left: 16px;
+  padding-left: 14px;
+  border-left: 1px solid var(--line);
+}
+
 .skill-row {
   display: grid;
   grid-template-columns: 32px minmax(0, 1fr) auto;
@@ -457,6 +544,12 @@ button:disabled {
 
 .origin-pill svg {
   flex: 0 0 auto;
+}
+
+.origin-pill.collection {
+  border-color: var(--origin-collection-border);
+  background: var(--origin-collection-bg);
+  color: var(--origin-collection-text);
 }
 
 .origin-pill.plugin {

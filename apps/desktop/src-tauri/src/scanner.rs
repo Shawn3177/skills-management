@@ -1,4 +1,4 @@
-use crate::fs_ops::home_dir;
+use crate::fs_ops::{home_dir, SOURCE_MARKER_FILE};
 use crate::targets::is_managed_target_copy;
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
@@ -25,14 +25,25 @@ pub struct ScannedSkill {
 pub struct SkillOrigin {
     pub kind: SkillOriginKind,
     pub plugin: Option<PluginIdentity>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub repository: Option<RepositoryIdentity>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum SkillOriginKind {
     Standalone,
+    Collection,
     Plugin,
     System,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RepositoryIdentity {
+    pub id: String,
+    pub name: String,
+    pub url: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -93,13 +104,26 @@ struct PluginPackage {
     manifest: PluginManifest,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+struct MarketplaceManifest {
+    name: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GithubSourceMetadata {
+    kind: String,
+    owner: String,
+    repo: String,
+}
+
 pub fn scan_default_skills() -> Vec<ScannedSkill> {
     let mut skills = scan_skill_roots(&candidate_skill_roots());
 
     if let Some(home) = home_dir() {
-        skills.extend(scan_plugin_cache(
-            &home.join(".codex").join("plugins").join("cache"),
-        ));
+        let codex_root = home.join(".codex");
+        skills.extend(scan_repository_collections(&codex_root));
+        skills.extend(scan_plugin_cache(&codex_root.join("plugins").join("cache")));
     }
 
     sort_skills(&mut skills);
@@ -169,7 +193,7 @@ fn scan_skill_dir(
         skill_dir,
         skill_file,
         &source,
-        skill_origin_for_root(root),
+        skill_origin_for_path(root, skill_dir),
         None,
         target_roots,
     )
@@ -224,6 +248,74 @@ fn scan_skill_dir_with_context(
     })
 }
 
+fn scan_repository_collections(codex_root: &Path) -> Vec<ScannedSkill> {
+    let target_roots = default_target_roots();
+    let mut skills = Vec::new();
+    let Ok(entries) = fs::read_dir(codex_root) else {
+        return skills;
+    };
+
+    for entry in entries.flatten() {
+        let package_root = entry.path();
+        if !package_root.is_dir() {
+            continue;
+        }
+
+        let manifest_path = package_root.join(".claude-plugin").join("marketplace.json");
+        let skills_root = package_root.join("skills");
+        if !manifest_path.is_file() || !skills_root.is_dir() {
+            continue;
+        }
+
+        let Ok(contents) = fs::read_to_string(manifest_path) else {
+            continue;
+        };
+        let Ok(manifest) = serde_json::from_str::<MarketplaceManifest>(&contents) else {
+            continue;
+        };
+        if manifest.name.trim().is_empty() {
+            continue;
+        }
+
+        let repository = RepositoryIdentity {
+            id: format!("local/{}", slug_id(&manifest.name)),
+            name: manifest.name,
+            url: None,
+        };
+        let origin = SkillOrigin {
+            kind: SkillOriginKind::Collection,
+            plugin: None,
+            repository: Some(repository.clone()),
+        };
+        let id_prefix = format!("collection:{}", repository.id);
+        let Ok(skill_entries) = fs::read_dir(&skills_root) else {
+            continue;
+        };
+
+        for skill_entry in skill_entries.flatten() {
+            let skill_dir = skill_entry.path();
+            let skill_file = skill_dir.join("SKILL.md");
+            if !skill_dir.is_dir() || !skill_file.is_file() {
+                continue;
+            }
+
+            if let Some(skill) = scan_skill_dir_with_context(
+                &skill_dir,
+                &skill_file,
+                "Codex",
+                origin.clone(),
+                Some(&id_prefix),
+                &target_roots,
+            ) {
+                skills.push(skill);
+            }
+        }
+    }
+
+    sort_skills(&mut skills);
+    skills
+}
+
 fn scan_plugin_cache(cache_root: &Path) -> Vec<ScannedSkill> {
     let target_roots = default_target_roots();
     let mut skills = Vec::new();
@@ -275,12 +367,14 @@ fn scan_plugin_cache(cache_root: &Path) -> Vec<ScannedSkill> {
         let origin = SkillOrigin {
             kind,
             plugin: Some(plugin.clone()),
+            repository: None,
         };
         let id_prefix = format!(
             "{}:{}",
             match kind {
                 SkillOriginKind::System => "system",
                 SkillOriginKind::Plugin => "plugin",
+                SkillOriginKind::Collection => "collection",
                 SkillOriginKind::Standalone => "skill",
             },
             plugin.id
@@ -418,7 +512,15 @@ fn plugin_origin_kind(channel: &str) -> SkillOriginKind {
     }
 }
 
-fn skill_origin_for_root(root: &Path) -> SkillOrigin {
+fn skill_origin_for_path(root: &Path, skill_dir: &Path) -> SkillOrigin {
+    if let Some(repository) = repository_from_source_marker(skill_dir) {
+        return SkillOrigin {
+            kind: SkillOriginKind::Collection,
+            plugin: None,
+            repository: Some(repository),
+        };
+    }
+
     let normalized = normalized_path(root);
     let kind = if normalized.contains("/.codex/skills/.system") {
         SkillOriginKind::System
@@ -426,7 +528,35 @@ fn skill_origin_for_root(root: &Path) -> SkillOrigin {
         SkillOriginKind::Standalone
     };
 
-    SkillOrigin { kind, plugin: None }
+    SkillOrigin {
+        kind,
+        plugin: None,
+        repository: None,
+    }
+}
+
+fn repository_from_source_marker(skill_dir: &Path) -> Option<RepositoryIdentity> {
+    let contents = fs::read_to_string(skill_dir.join(SOURCE_MARKER_FILE)).ok()?;
+    let source = serde_json::from_str::<GithubSourceMetadata>(&contents).ok()?;
+    if !source.kind.eq_ignore_ascii_case("github")
+        || source.owner.trim().is_empty()
+        || source.repo.trim().is_empty()
+    {
+        return None;
+    }
+
+    Some(RepositoryIdentity {
+        id: format!(
+            "github/{}/{}",
+            slug_id(&source.owner),
+            slug_id(&source.repo)
+        ),
+        name: format!("{}/{}", source.owner, source.repo),
+        url: Some(format!(
+            "https://github.com/{}/{}",
+            source.owner, source.repo
+        )),
+    })
 }
 
 fn parse_skill_metadata(contents: &str) -> SkillMetadata {
@@ -662,6 +792,68 @@ mod tests {
     }
 
     #[test]
+    fn scan_repository_collections_groups_marketplace_skills() {
+        let codex_root = unique_temp_dir("scan-repository-collection");
+        let package_root = codex_root.join("skills-main");
+        let marketplace_dir = package_root.join(".claude-plugin");
+        fs::create_dir_all(&marketplace_dir).unwrap();
+        fs::write(
+            marketplace_dir.join("marketplace.json"),
+            serde_json::json!({ "name": "anthropic-agent-skills" }).to_string(),
+        )
+        .unwrap();
+        create_plain_skill(&package_root.join("skills"), "alpha-skill");
+        create_plain_skill(&package_root.join("skills"), "beta-skill");
+
+        let skills = scan_repository_collections(&codex_root);
+
+        fs::remove_dir_all(codex_root).unwrap();
+
+        assert_eq!(skills.len(), 2);
+        assert_eq!(skills[0].origin.kind, SkillOriginKind::Collection);
+        assert_eq!(skills[0].source, "Codex");
+        assert!(skills[0].targets[0].enabled);
+        let repository = skills[0].origin.repository.as_ref().unwrap();
+        assert_eq!(repository.id, "local/anthropic-agent-skills");
+        assert_eq!(repository.name, "anthropic-agent-skills");
+        assert_eq!(repository.url, None);
+        assert!(skills[0]
+            .id
+            .starts_with("collection:local/anthropic-agent-skills/"));
+    }
+
+    #[test]
+    fn scan_skill_roots_reads_github_repository_marker() {
+        let temp_root = unique_temp_dir("scan-github-source");
+        let root = temp_root.join(".skills-manage").join("library");
+        let skill_dir = root.join("pdf");
+        create_plain_skill(&root, "pdf");
+        fs::write(
+            skill_dir.join(SOURCE_MARKER_FILE),
+            serde_json::json!({
+                "kind": "github",
+                "owner": "anthropics",
+                "repo": "skills"
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        let skills = scan_skill_roots(&[root]);
+
+        fs::remove_dir_all(temp_root).unwrap();
+
+        assert_eq!(skills.len(), 1);
+        assert_eq!(skills[0].origin.kind, SkillOriginKind::Collection);
+        let repository = skills[0].origin.repository.as_ref().unwrap();
+        assert_eq!(repository.id, "github/anthropics/skills");
+        assert_eq!(repository.name, "anthropics/skills");
+        assert_eq!(
+            repository.url.as_deref(),
+            Some("https://github.com/anthropics/skills")
+        );
+    }
+    #[test]
     fn scan_plugin_cache_reads_manifest_and_keeps_latest_version() {
         let cache_root = unique_temp_dir("scan-plugin-cache");
         create_plugin_skill(
@@ -799,6 +991,16 @@ mod tests {
             .unwrap()
             .as_nanos();
         std::env::temp_dir().join(format!("skills-manage-{prefix}-{stamp}"))
+    }
+
+    fn create_plain_skill(root: &Path, skill_name: &str) {
+        let skill_dir = root.join(skill_name);
+        fs::create_dir_all(&skill_dir).unwrap();
+        fs::write(
+            skill_dir.join("SKILL.md"),
+            format!("---\nname: {skill_name}\ndescription: Collection skill\n---\n"),
+        )
+        .unwrap();
     }
 
     fn create_plugin_skill(

@@ -1,5 +1,5 @@
 export type SkillHealth = "healthy" | "warning" | "broken";
-export type SkillOriginKind = "standalone" | "plugin" | "system";
+export type SkillOriginKind = "standalone" | "collection" | "plugin" | "system";
 
 export interface PluginIdentity {
   id: string;
@@ -8,9 +8,16 @@ export interface PluginIdentity {
   publisher: string;
 }
 
+export interface RepositoryIdentity {
+  id: string;
+  name: string;
+  url: string | null;
+}
+
 export interface SkillOrigin {
   kind: SkillOriginKind;
   plugin: PluginIdentity | null;
+  repository?: RepositoryIdentity | null;
 }
 
 export interface TargetState {
@@ -62,6 +69,9 @@ export function filterSkills(records: SkillRecord[], query: string): SkillRecord
       record.origin.plugin?.name ?? "",
       record.origin.plugin?.version ?? "",
       record.origin.plugin?.publisher ?? "",
+      record.origin.repository?.id ?? "",
+      record.origin.repository?.name ?? "",
+      record.origin.repository?.url ?? "",
       record.supportFiles.join(" "),
     ]
       .join(" ")
@@ -81,6 +91,38 @@ export function getSkillStats(records: SkillRecord[]): SkillStats {
       0,
     ),
   };
+}
+
+export interface SkillListGroup {
+  id: string;
+  repository: RepositoryIdentity | null;
+  skills: SkillRecord[];
+}
+
+export function groupSkillsForList(records: SkillRecord[]): SkillListGroup[] {
+  const groups = new Map<string, SkillListGroup>();
+
+  for (const record of records) {
+    const repository = record.origin.repository ?? null;
+    const key = repository ? `repository:${repository.id}` : `skill:${record.id}`;
+    const existing = groups.get(key);
+
+    if (existing) {
+      existing.skills.push(record);
+    } else {
+      groups.set(key, {
+        id: key,
+        repository,
+        skills: [record],
+      });
+    }
+  }
+
+  return Array.from(groups.values());
+}
+
+export function isImportableSkill(record: SkillRecord): boolean {
+  return record.origin.kind === "standalone" || record.origin.kind === "collection";
 }
 
 export function mergeSameNamedSkills(records: SkillRecord[]): SkillRecord[] {
@@ -155,7 +197,9 @@ function mergeGroupKey(record: SkillRecord): string {
   const originGroup =
     record.origin.kind === "standalone"
       ? "standalone"
-      : record.origin.kind + ":" + (record.origin.plugin?.id ?? "codex-system");
+      : record.origin.kind === "collection"
+        ? `collection:${record.origin.repository?.id ?? "local"}`
+        : record.origin.kind + ":" + (record.origin.plugin?.id ?? "codex-system");
 
   return [originGroup, normalizedMergeText(record.name), normalizedMergeText(record.description)].join("\u0000");
 }

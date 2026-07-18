@@ -41,6 +41,39 @@ const scannedPluginSkill = {
   },
 };
 
+const scannedCollectionSkills = [
+  {
+    ...scannedCodexSkill,
+    id: "collection:local/anthropic-agent-skills/algorithmic-art",
+    name: "algorithmic-art",
+    sourcePath: "C:/Users/example/.codex/skills-main/skills/algorithmic-art",
+    origin: {
+      kind: "collection",
+      plugin: null,
+      repository: {
+        id: "local/anthropic-agent-skills",
+        name: "anthropic-agent-skills",
+        url: null,
+      },
+    },
+  },
+  {
+    ...scannedCodexSkill,
+    id: "collection:local/anthropic-agent-skills/canvas-design",
+    name: "canvas-design",
+    sourcePath: "C:/Users/example/.codex/skills-main/skills/canvas-design",
+    origin: {
+      kind: "collection",
+      plugin: null,
+      repository: {
+        id: "local/anthropic-agent-skills",
+        name: "anthropic-agent-skills",
+        url: null,
+      },
+    },
+  },
+];
+
 const sharedLibrarySkill = {
   ...scannedCodexSkill,
   source: "Shared Library",
@@ -143,6 +176,27 @@ describe("App", () => {
     expect(within(detail).getByText("0.1.8")).toBeInTheDocument();
     expect(within(detail).getByText("OpenAI")).toBeInTheDocument();
     expect(within(detail).getByRole("button", { name: "Managed by Codex" })).toBeDisabled();
+  });
+
+  it("collapses skills downloaded from the same repository into one expandable group", async () => {
+    invokeMock.mockResolvedValue([scannedCodexSkill, ...scannedCollectionSkills]);
+
+    render(<App />);
+    fireEvent.click(screen.getByRole("button", { name: "EN" }));
+
+    const collectionButton = await screen.findByRole("button", { name: "Expand anthropic-agent-skills" });
+    expect(screen.getByText("2 skills")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /algorithmic-art/ })).not.toBeInTheDocument();
+
+    fireEvent.click(collectionButton);
+
+    const skillButton = screen.getByRole("button", { name: /algorithmic-art/ });
+    expect(skillButton).toBeInTheDocument();
+    fireEvent.click(skillButton);
+
+    const detail = screen.getByRole("region", { name: "Skill detail" });
+    expect(within(detail).getByText("Repository collection")).toBeInTheDocument();
+    expect(within(detail).getByText("anthropic-agent-skills")).toBeInTheDocument();
   });
 
   it("switches the visible app chrome to English without changing skill data", async () => {

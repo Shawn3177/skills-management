@@ -62,6 +62,52 @@ export const demoSkills: SkillRecord[] = [
     supportFiles: ["SKILL.md", "manifest.json"],
   },
   {
+    id: "collection:local/anthropic-agent-skills/algorithmic-art",
+    name: "algorithmic-art",
+    description: "Creates seeded generative artwork with p5.js and reproducible controls.",
+    source: "Codex",
+    sourcePath: "C:/Users/Shawn/.codex/skills-main/skills/algorithmic-art",
+    origin: {
+      kind: "collection",
+      plugin: null,
+      repository: {
+        id: "local/anthropic-agent-skills",
+        name: "anthropic-agent-skills",
+        url: null,
+      },
+    },
+    health: "healthy",
+    targets: [
+      { id: "codex", name: "Codex", enabled: true },
+      { id: "claude-code", name: "Claude Code", enabled: false },
+      { id: "vs-code", name: "VS Code", enabled: false },
+    ],
+    supportFiles: ["SKILL.md"],
+  },
+  {
+    id: "collection:local/anthropic-agent-skills/canvas-design",
+    name: "canvas-design",
+    description: "Builds polished visual artwork and document-ready layouts.",
+    source: "Codex",
+    sourcePath: "C:/Users/Shawn/.codex/skills-main/skills/canvas-design",
+    origin: {
+      kind: "collection",
+      plugin: null,
+      repository: {
+        id: "local/anthropic-agent-skills",
+        name: "anthropic-agent-skills",
+        url: null,
+      },
+    },
+    health: "healthy",
+    targets: [
+      { id: "codex", name: "Codex", enabled: true },
+      { id: "claude-code", name: "Claude Code", enabled: false },
+      { id: "vs-code", name: "VS Code", enabled: false },
+    ],
+    supportFiles: ["SKILL.md"],
+  },
+  {
     id: "plugin:openai/github/gh-fix-ci",
     name: "gh-fix-ci",
     description: "Diagnoses failing GitHub Actions checks and prepares a focused fix.",
