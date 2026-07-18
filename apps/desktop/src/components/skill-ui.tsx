@@ -47,20 +47,6 @@ export const originIcons = {
   system: ShieldCheck,
 };
 
-export function getSkillOriginLabel(skill: SkillRecord, t: TFunction) {
-  const kindLabel = t(originLabelKeys[skill.origin.kind]);
-
-  if (skill.origin.plugin) {
-    return `${skill.origin.plugin.name} · ${kindLabel}`;
-  }
-
-  if (skill.origin.repository) {
-    return `${skill.origin.repository.name} · ${kindLabel}`;
-  }
-
-  return kindLabel;
-}
-
 export const toggleableTargets = [
   { id: "codex", name: "Codex" },
   { id: "claude-code", name: "Claude Code" },
@@ -120,22 +106,45 @@ export function SkillSourceGroup({
   );
 }
 
+export function SkillListSection({
+  kind,
+  title,
+  summary,
+  children,
+}: {
+  kind: SkillOriginKind;
+  title: string;
+  summary: string;
+  children: ReactNode;
+}) {
+  const OriginIcon = originIcons[kind];
+
+  return (
+    <section className="skill-list-section" aria-label={title}>
+      <header className="skill-list-section-header">
+        <span className={`skill-list-section-icon ${kind}`}>
+          <OriginIcon size={15} strokeWidth={1.9} aria-hidden="true" />
+        </span>
+        <h2>{title}</h2>
+        <span className="skill-list-section-summary">{summary}</span>
+      </header>
+      <div className="skill-list-section-items">{children}</div>
+    </section>
+  );
+}
+
 export function SkillListItem({
   skill,
   selected,
   onSelect,
   usageLabels,
-  t,
 }: {
   skill: SkillRecord;
   selected: boolean;
   onSelect: () => void;
   usageLabels: string[];
-  t: TFunction;
 }) {
   const Icon = healthIcons[skill.health];
-  const OriginIcon = originIcons[skill.origin.kind];
-  const originLabel = getSkillOriginLabel(skill, t);
 
   return (
     <button
@@ -152,17 +161,15 @@ export function SkillListItem({
         <strong>{skill.name}</strong>
         <span>{skill.description}</span>
       </span>
-      <span className="skill-row-meta">
-        <span className={"origin-pill " + skill.origin.kind} title={originLabel}>
-          <OriginIcon size={14} strokeWidth={1.9} aria-hidden="true" />
-          {originLabel}
+      {usageLabels.length > 0 ? (
+        <span className="skill-row-meta">
+          {usageLabels.map((label) => (
+            <span className="usage-pill" key={label}>
+              {label}
+            </span>
+          ))}
         </span>
-        {usageLabels.map((label) => (
-          <span className="usage-pill" key={label}>
-            {label}
-          </span>
-        ))}
-      </span>
+      ) : null}
     </button>
   );
 }

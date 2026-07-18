@@ -3,6 +3,7 @@ import {
   filterSkills,
   getSkillStats,
   groupSkillsForList,
+  groupSkillsIntoSections,
   isImportableSkill,
   mergeSameNamedSkills,
   type SkillRecord,
@@ -59,6 +60,17 @@ const secondPluginRecord: SkillRecord = {
   name: "gh-address-comments",
   sourcePath:
     "C:/Users/example/.codex/plugins/cache/openai-curated-remote/github/0.1.8/skills/gh-address-comments",
+};
+
+const systemRecord: SkillRecord = {
+  ...records[0],
+  id: "skill-installer",
+  name: "skill-installer",
+  sourcePath: "C:/Users/example/.codex/skills/.system/skill-installer",
+  origin: {
+    kind: "system",
+    plugin: null,
+  },
 };
 
 const collectionRecords: SkillRecord[] = [
@@ -126,9 +138,9 @@ describe("groupSkillsForList", () => {
     const groups = groupSkillsForList([records[0], ...collectionRecords]);
 
     expect(groups).toHaveLength(2);
-    expect(groups[0].repository).toBeNull();
-    expect(groups[1].repository?.name).toBe("anthropic-agent-skills");
-    expect(groups[1].skills.map((skill) => skill.name)).toEqual(["algorithmic-art", "canvas-design"]);
+    const collection = groups.find((group) => group.repository);
+    expect(collection?.repository?.name).toBe("anthropic-agent-skills");
+    expect(collection?.skills.map((skill) => skill.name)).toEqual(["algorithmic-art", "canvas-design"]);
   });
 
   it("collapses records from one Codex plugin package into one list group", () => {
@@ -138,7 +150,32 @@ describe("groupSkillsForList", () => {
     expect(groups[0].kind).toBe("plugin");
     expect(groups[0].plugin?.name).toBe("GitHub");
     expect(groups[0].plugin?.repository).toBe("https://github.com/openai/plugins");
-    expect(groups[0].skills.map((skill) => skill.name)).toEqual(["gh-fix-ci", "gh-address-comments"]);
+    expect(groups[0].skills.map((skill) => skill.name)).toEqual(["gh-address-comments", "gh-fix-ci"]);
+  });
+
+  it("organizes sources into a predictable section order and sorts each section", () => {
+    const sections = groupSkillsIntoSections([
+      systemRecord,
+      collectionRecords[1],
+      records[0],
+      secondPluginRecord,
+      collectionRecords[0],
+      pluginRecord,
+    ]);
+
+    expect(sections.map((section) => section.kind)).toEqual([
+      "collection",
+      "plugin",
+      "standalone",
+      "system",
+    ]);
+    expect(sections[0].groups[0].skills.map((skill) => skill.name)).toEqual([
+      "algorithmic-art",
+      "canvas-design",
+    ]);
+    expect(sections[1]).toMatchObject({ skillCount: 2, sourceCount: 1 });
+    expect(sections[2].groups[0].skills[0].name).toBe("codex-style");
+    expect(sections[3].groups[0].skills[0].name).toBe("skill-installer");
   });
 
   it("allows collection skills to be imported without treating plugins as standalone", () => {

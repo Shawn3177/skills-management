@@ -30,6 +30,17 @@ export type MessageKey =
   | "nav.imported"
   | "search.label"
   | "search.placeholder"
+  | "filters.origin"
+  | "filters.all"
+  | "filters.standalone"
+  | "filters.collection"
+  | "filters.plugin"
+  | "filters.system"
+  | "sections.standalone"
+  | "sections.collection"
+  | "sections.plugin"
+  | "sections.system"
+  | "sections.summary"
   | "actions.scan"
   | "actions.importToLibrary"
   | "actions.importAllToLibrary"
@@ -173,6 +184,17 @@ export const messages: Record<Locale, Record<MessageKey, string>> = {
     "nav.imported": "已导入",
     "search.label": "搜索技能",
     "search.placeholder": "搜索技能、来源、路径",
+    "filters.origin": "按来源筛选",
+    "filters.all": "全部",
+    "filters.standalone": "独立 Skill",
+    "filters.collection": "仓库合集",
+    "filters.plugin": "Codex 插件",
+    "filters.system": "系统组件",
+    "sections.standalone": "独立 Skill",
+    "sections.collection": "仓库合集",
+    "sections.plugin": "Codex 插件",
+    "sections.system": "系统组件",
+    "sections.summary": "{sourceCount} 个来源 · {skillCount} 个 Skill",
     "actions.scan": "扫描本地技能",
     "actions.importToLibrary": "导入共享库",
     "actions.importAllToLibrary": "全部导入",
@@ -313,6 +335,17 @@ export const messages: Record<Locale, Record<MessageKey, string>> = {
     "nav.imported": "Imported",
     "search.label": "Search skills",
     "search.placeholder": "Search skills, sources, paths",
+    "filters.origin": "Filter by source",
+    "filters.all": "All",
+    "filters.standalone": "Standalone",
+    "filters.collection": "Collections",
+    "filters.plugin": "Codex plugins",
+    "filters.system": "System",
+    "sections.standalone": "Standalone skills",
+    "sections.collection": "Repository collections",
+    "sections.plugin": "Codex plugins",
+    "sections.system": "System components",
+    "sections.summary": "{sourceCount} sources · {skillCount} skills",
     "actions.scan": "Scan local skills",
     "actions.importToLibrary": "Import to library",
     "actions.importAllToLibrary": "Import all",

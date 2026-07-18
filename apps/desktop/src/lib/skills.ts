@@ -136,7 +136,55 @@ export function groupSkillsForList(records: SkillRecord[]): SkillListGroup[] {
     }
   }
 
-  return Array.from(groups.values());
+  return Array.from(groups.values())
+    .map((group) => ({
+      ...group,
+      skills: [...group.skills].sort(compareSkillRecords),
+    }))
+    .sort((left, right) => compareLabels(groupDisplayName(left), groupDisplayName(right)));
+}
+
+export interface SkillListSection {
+  kind: SkillOriginKind;
+  skillCount: number;
+  sourceCount: number;
+  groups: SkillListGroup[];
+}
+
+const skillSectionOrder: SkillOriginKind[] = ["collection", "plugin", "standalone", "system"];
+
+export function groupSkillsIntoSections(records: SkillRecord[]): SkillListSection[] {
+  const groupsByKind = new Map<SkillOriginKind, SkillListGroup[]>();
+
+  for (const group of groupSkillsForList(records)) {
+    const kind = group.kind ?? group.skills[0]?.origin.kind;
+    if (!kind) {
+      continue;
+    }
+
+    const sectionGroups = groupsByKind.get(kind);
+    if (sectionGroups) {
+      sectionGroups.push(group);
+    } else {
+      groupsByKind.set(kind, [group]);
+    }
+  }
+
+  return skillSectionOrder.flatMap((kind) => {
+    const groups = groupsByKind.get(kind) ?? [];
+    if (groups.length === 0) {
+      return [];
+    }
+
+    return [
+      {
+        kind,
+        skillCount: groups.reduce((count, group) => count + group.skills.length, 0),
+        sourceCount: groups.length,
+        groups,
+      },
+    ];
+  });
 }
 
 export function isImportableSkill(record: SkillRecord): boolean {
@@ -220,6 +268,18 @@ function mergeGroupKey(record: SkillRecord): string {
         : record.origin.kind + ":" + (record.origin.plugin?.id ?? "codex-system");
 
   return [originGroup, normalizedMergeText(record.name), normalizedMergeText(record.description)].join("\u0000");
+}
+
+function groupDisplayName(group: SkillListGroup): string {
+  return group.repository?.name ?? group.plugin?.name ?? group.skills[0]?.name ?? group.id;
+}
+
+function compareSkillRecords(left: SkillRecord, right: SkillRecord): number {
+  return compareLabels(left.name, right.name) || compareLabels(left.id, right.id);
+}
+
+function compareLabels(left: string, right: string): number {
+  return left.localeCompare(right, "en", { sensitivity: "base", numeric: true });
 }
 
 function normalizedMergeText(value: string): string {

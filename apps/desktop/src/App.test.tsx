@@ -166,18 +166,21 @@ describe("App", () => {
     expect(invokeMock).toHaveBeenCalledWith("scan_skills");
   });
 
-  it("distinguishes standalone and plugin skills in the list and details", async () => {
+  it("distinguishes standalone and plugin skills through sections and details", async () => {
     invokeMock.mockResolvedValue([scannedCodexSkill, scannedPluginSkill]);
 
     render(<App />);
-    await waitFor(() => expect(screen.getAllByText("gh-fix-ci").length).toBeGreaterThan(0));
+    await waitFor(() => expect(screen.getAllByText("local-scan-skill").length).toBeGreaterThan(0));
     fireEvent.click(screen.getByRole("button", { name: "EN" }));
 
-    const standaloneRow = screen.getByRole("button", { name: /local-scan-skill/ });
-    expect(within(standaloneRow).getByText("Standalone skill")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Standalone skills" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Codex plugins" })).toBeInTheDocument();
 
+    const standaloneRow = screen.getByRole("button", { name: /local-scan-skill/ });
+    expect(within(standaloneRow).queryByText("Standalone skill")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Expand GitHub" }));
     const pluginRow = screen.getByRole("button", { name: /gh-fix-ci/ });
-    expect(within(pluginRow).getByText("GitHub · Plugin skill")).toBeInTheDocument();
     fireEvent.click(pluginRow);
 
     const detail = screen.getByRole("region", { name: "Skill detail" });
@@ -225,6 +228,47 @@ describe("App", () => {
 
     expect(screen.getByRole("button", { name: /gh-fix-ci/ })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /gh-address-comments/ })).toBeInTheDocument();
+  });
+
+  it("filters the list by source category and keeps the all view grouped", async () => {
+    invokeMock.mockResolvedValue([
+      scannedCodexSkill,
+      scannedPluginSkill,
+      ...scannedCollectionSkills,
+    ]);
+
+    render(<App />);
+    await waitFor(() => expect(screen.getAllByText("local-scan-skill").length).toBeGreaterThan(0));
+    fireEvent.click(screen.getByRole("button", { name: "EN" }));
+
+    expect(screen.getAllByRole("tab").map((tab) => tab.textContent)).toEqual([
+      "All4",
+      "Collections2",
+      "Codex plugins1",
+      "Standalone1",
+      "System0",
+    ]);
+
+    const sectionNames = screen
+      .getAllByRole("heading", { level: 2 })
+      .map((heading) => heading.textContent);
+    expect(sectionNames).toEqual([
+      "Repository collections",
+      "Codex plugins",
+      "Standalone skills",
+    ]);
+    expect(
+      within(screen.getByRole("region", { name: "Standalone skills" })).getByText("1 skills"),
+    ).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("tab", { name: /Collections\s*2/ }));
+    expect(screen.getByRole("button", { name: "Expand anthropic-agent-skills" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /local-scan-skill/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Expand GitHub" })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("tab", { name: /Standalone\s*1/ }));
+    expect(screen.getByRole("button", { name: /local-scan-skill/ })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Expand anthropic-agent-skills" })).not.toBeInTheDocument();
   });
 
   it("switches the visible app chrome to English without changing skill data", async () => {

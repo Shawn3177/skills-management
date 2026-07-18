@@ -7,8 +7,10 @@ import { LanguageSwitch } from "./components/LanguageSwitch";
 import {
   hasSource,
   healthIcons,
+  originIcons,
   SkillSourceGroup,
   SkillDetail,
+  SkillListSection,
   SkillListItem,
   StatusMessage,
   ToggleSwitch,
@@ -24,14 +26,31 @@ import {
   filterSkills,
   getSkillStats,
   getSkillUsageLabels,
-  groupSkillsForList,
+  groupSkillsIntoSections,
   isImportableSkill,
   mergeSameNamedSkills,
+  type SkillOriginKind,
   type SkillRecord,
 } from "./lib/skills";
 import type { MessageKey } from "./i18n/messages";
 
 type SectionId = "skills" | "import" | "packages" | "settings";
+type OriginFilterId = "all" | SkillOriginKind;
+
+const originFilters = [
+  { id: "all", key: "filters.all", icon: LayoutGrid },
+  { id: "collection", key: "filters.collection", icon: originIcons.collection },
+  { id: "plugin", key: "filters.plugin", icon: originIcons.plugin },
+  { id: "standalone", key: "filters.standalone", icon: originIcons.standalone },
+  { id: "system", key: "filters.system", icon: originIcons.system },
+] satisfies Array<{ id: OriginFilterId; key: MessageKey; icon: typeof Boxes }>;
+
+const originSectionLabelKeys: Record<SkillOriginKind, MessageKey> = {
+  standalone: "sections.standalone",
+  collection: "sections.collection",
+  plugin: "sections.plugin",
+  system: "sections.system",
+};
 
 const sections = [
   { id: "skills", key: "nav.skills", icon: LayoutGrid },
@@ -129,6 +148,7 @@ function App() {
   const { locale, setLocale, t } = useLocale();
   const [activeSection, setActiveSection] = useState<SectionId>("skills");
   const [query, setQuery] = useState("");
+  const [originFilter, setOriginFilter] = useState<OriginFilterId>("all");
   const [skills, setSkills] = useState<SkillRecord[]>([]);
   const [selectedId, setSelectedId] = useState("");
   const [expandedSourceGroups, setExpandedSourceGroups] = useState<Set<string>>(new Set());
@@ -162,8 +182,26 @@ function App() {
   );
   const usingFallback = scanState === "ready" && skills.length === 0;
   const filteredSkills = useMemo(() => filterSkills(groupedSkills, query), [groupedSkills, query]);
-  const skillListGroups = useMemo(() => groupSkillsForList(filteredSkills), [filteredSkills]);
-  const selectedSkill = filteredSkills.find((skill) => skill.id === selectedId) ?? filteredSkills[0];
+  const categorySkills = useMemo(
+    () =>
+      originFilter === "all"
+        ? filteredSkills
+        : filteredSkills.filter((skill) => skill.origin.kind === originFilter),
+    [filteredSkills, originFilter],
+  );
+  const skillListSections = useMemo(() => groupSkillsIntoSections(categorySkills), [categorySkills]);
+  const originCounts = useMemo(
+    () =>
+      groupedSkills.reduce<Record<SkillOriginKind, number>>(
+        (counts, skill) => {
+          counts[skill.origin.kind] += 1;
+          return counts;
+        },
+        { standalone: 0, collection: 0, plugin: 0, system: 0 },
+      ),
+    [groupedSkills],
+  );
+  const selectedSkill = categorySkills.find((skill) => skill.id === selectedId) ?? categorySkills[0];
   const importedSkills = filteredSkills.filter((skill) => hasSource(skill, "Shared Library"));
   const stats = useMemo(() => getSkillStats(groupedSkills), [groupedSkills]);
   const importDisabled =
@@ -437,7 +475,6 @@ function App() {
         selected={skill.id === selectedId}
         onSelect={() => openSkillDetail(skill.id)}
         usageLabels={getSkillUsageLabels(skill)}
-        t={t}
       />
     );
   }
@@ -850,45 +887,90 @@ function App() {
               />
             </section>
           ) : (
-            <section
-              className="skills-list scroll-surface"
-              aria-label={t("regions.discoveredSkills")}
-              ref={skillListRef}
-              tabIndex={-1}
-            >
-              {skillListGroups.map((group) => {
-                if (group.skills.length <= 1 || !group.kind || (!group.repository && !group.plugin)) {
-                  return group.skills.map(renderSkillListItem);
-                }
+            <div className="skill-list-view">
+              <nav className="skill-origin-tabs" aria-label={t("filters.origin")} role="tablist">
+                {originFilters.map((filter) => {
+                  const FilterIcon = filter.icon;
+                  const count = filter.id === "all" ? groupedSkills.length : originCounts[filter.id];
 
-                const sourceName = group.repository?.name ?? group.plugin!.name;
-                const sourceDescription = group.repository
-                  ? group.repository.url ?? t("collection.localSource")
-                  : group.plugin!.repository ??
-                    [group.plugin!.publisher, "v" + group.plugin!.version].join(" · ");
+                  return (
+                    <button
+                      className={originFilter === filter.id ? "active" : ""}
+                      type="button"
+                      role="tab"
+                      aria-selected={originFilter === filter.id}
+                      aria-controls="skills-origin-panel"
+                      key={filter.id}
+                      onClick={() => {
+                        setOriginFilter(filter.id);
+                        setDetailOpen(false);
+                      }}
+                    >
+                      <FilterIcon size={15} strokeWidth={1.9} aria-hidden="true" />
+                      <span>{t(filter.key)}</span>
+                      <span className="skill-origin-tab-count">{count}</span>
+                    </button>
+                  );
+                })}
+              </nav>
 
-                return (
-                  <SkillSourceGroup
-                    key={group.id}
-                    name={sourceName}
-                    description={sourceDescription}
-                    kind={group.kind}
-                    skillCount={group.skills.length}
-                    expanded={query.trim().length > 0 || expandedSourceGroups.has(group.id)}
-                    onToggle={() => toggleSourceGroup(group.id)}
-                    t={t}
+              <section
+                className="skills-list scroll-surface"
+                id="skills-origin-panel"
+                aria-label={t("regions.discoveredSkills")}
+                ref={skillListRef}
+                tabIndex={-1}
+              >
+                {skillListSections.map((section) => (
+                  <SkillListSection
+                    kind={section.kind}
+                    title={t(originSectionLabelKeys[section.kind])}
+                    summary={
+                      section.kind === "standalone"
+                        ? t("collection.skillCount", { count: section.skillCount })
+                        : t("sections.summary", {
+                            sourceCount: section.sourceCount,
+                            skillCount: section.skillCount,
+                          })
+                    }
+                    key={section.kind}
                   >
-                    {group.skills.map(renderSkillListItem)}
-                  </SkillSourceGroup>
-                );
-              })}
-              {filteredSkills.length === 0 ? (
-                <div className="empty-state">
-                  <p>{t("status.empty.title")}</p>
-                  <span>{t("status.empty.body")}</span>
-                </div>
-              ) : null}
-            </section>
+                    {section.groups.map((group) => {
+                      if (!group.kind || (!group.repository && !group.plugin)) {
+                        return group.skills.map(renderSkillListItem);
+                      }
+
+                      const sourceName = group.repository?.name ?? group.plugin!.name;
+                      const sourceDescription = group.repository
+                        ? group.repository.url ?? t("collection.localSource")
+                        : group.plugin!.repository ??
+                          [group.plugin!.publisher, "v" + group.plugin!.version].join(" · ");
+
+                      return (
+                        <SkillSourceGroup
+                          key={group.id}
+                          name={sourceName}
+                          description={sourceDescription}
+                          kind={group.kind}
+                          skillCount={group.skills.length}
+                          expanded={query.trim().length > 0 || expandedSourceGroups.has(group.id)}
+                          onToggle={() => toggleSourceGroup(group.id)}
+                          t={t}
+                        >
+                          {group.skills.map(renderSkillListItem)}
+                        </SkillSourceGroup>
+                      );
+                    })}
+                  </SkillListSection>
+                ))}
+                {categorySkills.length === 0 ? (
+                  <div className="empty-state">
+                    <p>{t("status.empty.title")}</p>
+                    <span>{t("status.empty.body")}</span>
+                  </div>
+                ) : null}
+              </section>
+            </div>
           )
         ) : null}
 
