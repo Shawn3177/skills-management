@@ -6,6 +6,7 @@ export interface PluginIdentity {
   name: string;
   version: string;
   publisher: string;
+  repository?: string | null;
 }
 
 export interface RepositoryIdentity {
@@ -69,6 +70,7 @@ export function filterSkills(records: SkillRecord[], query: string): SkillRecord
       record.origin.plugin?.name ?? "",
       record.origin.plugin?.version ?? "",
       record.origin.plugin?.publisher ?? "",
+      record.origin.plugin?.repository ?? "",
       record.origin.repository?.id ?? "",
       record.origin.repository?.name ?? "",
       record.origin.repository?.url ?? "",
@@ -95,7 +97,9 @@ export function getSkillStats(records: SkillRecord[]): SkillStats {
 
 export interface SkillListGroup {
   id: string;
+  kind: Exclude<SkillOriginKind, "standalone"> | null;
   repository: RepositoryIdentity | null;
+  plugin: PluginIdentity | null;
   skills: SkillRecord[];
 }
 
@@ -104,7 +108,19 @@ export function groupSkillsForList(records: SkillRecord[]): SkillListGroup[] {
 
   for (const record of records) {
     const repository = record.origin.repository ?? null;
-    const key = repository ? `repository:${repository.id}` : `skill:${record.id}`;
+    const plugin = repository ? null : record.origin.plugin;
+    const kind = repository
+      ? "collection"
+      : plugin
+        ? record.origin.kind === "system"
+          ? "system"
+          : "plugin"
+        : null;
+    const key = repository
+      ? "repository:" + repository.id
+      : plugin
+        ? kind + ":" + plugin.id
+        : "skill:" + record.id;
     const existing = groups.get(key);
 
     if (existing) {
@@ -112,7 +128,9 @@ export function groupSkillsForList(records: SkillRecord[]): SkillListGroup[] {
     } else {
       groups.set(key, {
         id: key,
+        kind,
         repository,
+        plugin,
         skills: [record],
       });
     }

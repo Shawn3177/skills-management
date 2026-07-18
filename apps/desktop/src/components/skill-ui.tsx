@@ -16,7 +16,7 @@ import {
 import type { MessageKey } from "../i18n/messages";
 import type { TFunction } from "../i18n/useLocale";
 import { isImportableSkill } from "../lib/skills";
-import type { RepositoryIdentity, SkillHealth, SkillOriginKind, SkillRecord } from "../lib/skills";
+import type { SkillHealth, SkillOriginKind, SkillRecord } from "../lib/skills";
 
 export type ImportState = "idle" | "importing" | "success" | "error";
 export type TargetActionState = "idle" | "saving" | "success" | "error";
@@ -74,45 +74,48 @@ export function hasSource(skill: SkillRecord, source: string) {
     .includes(source);
 }
 
-export function SkillCollectionGroup({
-  repository,
+export function SkillSourceGroup({
+  name,
+  description,
+  kind,
   skillCount,
   expanded,
   onToggle,
   children,
   t,
 }: {
-  repository: RepositoryIdentity;
+  name: string;
+  description: string;
+  kind: Exclude<SkillOriginKind, "standalone">;
   skillCount: number;
   expanded: boolean;
   onToggle: () => void;
   children: ReactNode;
   t: TFunction;
 }) {
-  const actionLabel = t(expanded ? "actions.collapseCollection" : "actions.expandCollection", {
-    name: repository.name,
-  });
+  const actionLabel = t(expanded ? "actions.collapseCollection" : "actions.expandCollection", { name });
+  const OriginIcon = originIcons[kind];
 
   return (
-    <section className={`skill-collection ${expanded ? "expanded" : ""}`} aria-label={repository.name}>
+    <section className={`skill-source-group ${kind} ${expanded ? "expanded" : ""}`} aria-label={name}>
       <button
-        className="skill-collection-header"
+        className="skill-source-group-header"
         type="button"
         aria-expanded={expanded}
         aria-label={actionLabel}
         onClick={onToggle}
       >
-        <span className="skill-collection-icon">
-          <GitFork size={18} strokeWidth={1.8} aria-hidden="true" />
+        <span className={`skill-source-group-icon ${kind}`}>
+          <OriginIcon size={18} strokeWidth={1.8} aria-hidden="true" />
         </span>
-        <span className="skill-collection-main">
-          <strong>{repository.name}</strong>
-          <span>{repository.url ?? t("collection.localSource")}</span>
+        <span className="skill-source-group-main">
+          <strong>{name}</strong>
+          <span title={description}>{description}</span>
         </span>
-        <span className="skill-collection-count">{t("collection.skillCount", { count: skillCount })}</span>
-        <ChevronDown className="skill-collection-chevron" size={18} strokeWidth={1.8} aria-hidden="true" />
+        <span className="skill-source-group-count">{t("collection.skillCount", { count: skillCount })}</span>
+        <ChevronDown className="skill-source-group-chevron" size={18} strokeWidth={1.8} aria-hidden="true" />
       </button>
-      {expanded ? <div className="skill-collection-items">{children}</div> : null}
+      {expanded ? <div className="skill-source-group-items">{children}</div> : null}
     </section>
   );
 }
@@ -274,6 +277,12 @@ export function SkillDetail({
                 <dt>{t("detail.publisher")}</dt>
                 <dd>{skill.origin.plugin.publisher}</dd>
               </div>
+              {skill.origin.plugin.repository ? (
+                <div>
+                  <dt>{t("detail.repositoryUrl")}</dt>
+                  <dd>{skill.origin.plugin.repository}</dd>
+                </div>
+              ) : null}
             </>
           ) : null}
           {skill.origin.repository ? (

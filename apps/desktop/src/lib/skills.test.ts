@@ -48,8 +48,17 @@ const pluginRecord: SkillRecord = {
       name: "GitHub",
       version: "0.1.8",
       publisher: "OpenAI",
+      repository: "https://github.com/openai/plugins",
     },
   },
+};
+
+const secondPluginRecord: SkillRecord = {
+  ...pluginRecord,
+  id: "plugin:openai/github/gh-address-comments",
+  name: "gh-address-comments",
+  sourcePath:
+    "C:/Users/example/.codex/plugins/cache/openai-curated-remote/github/0.1.8/skills/gh-address-comments",
 };
 
 const collectionRecords: SkillRecord[] = [
@@ -92,6 +101,7 @@ describe("filterSkills", () => {
     expect(filterSkills(records, ".codex")).toHaveLength(1);
     expect(filterSkills([...records, pluginRecord], "github")).toEqual([pluginRecord]);
     expect(filterSkills([...records, pluginRecord], "0.1.8")).toEqual([pluginRecord]);
+    expect(filterSkills([...records, pluginRecord], "openai/plugins")).toEqual([pluginRecord]);
     expect(filterSkills(collectionRecords, "anthropic-agent-skills")).toEqual(collectionRecords);
   });
 
@@ -119,6 +129,16 @@ describe("groupSkillsForList", () => {
     expect(groups[0].repository).toBeNull();
     expect(groups[1].repository?.name).toBe("anthropic-agent-skills");
     expect(groups[1].skills.map((skill) => skill.name)).toEqual(["algorithmic-art", "canvas-design"]);
+  });
+
+  it("collapses records from one Codex plugin package into one list group", () => {
+    const groups = groupSkillsForList([pluginRecord, secondPluginRecord]);
+
+    expect(groups).toHaveLength(1);
+    expect(groups[0].kind).toBe("plugin");
+    expect(groups[0].plugin?.name).toBe("GitHub");
+    expect(groups[0].plugin?.repository).toBe("https://github.com/openai/plugins");
+    expect(groups[0].skills.map((skill) => skill.name)).toEqual(["gh-fix-ci", "gh-address-comments"]);
   });
 
   it("allows collection skills to be imported without treating plugins as standalone", () => {

@@ -37,8 +37,18 @@ const scannedPluginSkill = {
       name: "GitHub",
       version: "0.1.8",
       publisher: "OpenAI",
+      repository: "https://github.com/openai/plugins",
     },
   },
+};
+
+const secondScannedPluginSkill = {
+  ...scannedPluginSkill,
+  id: "plugin:openai/github/gh-address-comments",
+  name: "gh-address-comments",
+  description: "Addresses actionable GitHub pull request feedback.",
+  sourcePath:
+    "C:/Users/example/.codex/plugins/cache/openai-curated-remote/github/0.1.8/skills/gh-address-comments",
 };
 
 const scannedCollectionSkills = [
@@ -175,6 +185,7 @@ describe("App", () => {
     expect(within(detail).getByText("GitHub")).toBeInTheDocument();
     expect(within(detail).getByText("0.1.8")).toBeInTheDocument();
     expect(within(detail).getByText("OpenAI")).toBeInTheDocument();
+    expect(within(detail).getByText("https://github.com/openai/plugins")).toBeInTheDocument();
     expect(within(detail).getByRole("button", { name: "Managed by Codex" })).toBeDisabled();
   });
 
@@ -197,6 +208,23 @@ describe("App", () => {
     const detail = screen.getByRole("region", { name: "Skill detail" });
     expect(within(detail).getByText("Repository collection")).toBeInTheDocument();
     expect(within(detail).getByText("anthropic-agent-skills")).toBeInTheDocument();
+  });
+
+  it("collapses multiple skills from the same Codex plugin package", async () => {
+    invokeMock.mockResolvedValue([scannedCodexSkill, scannedPluginSkill, secondScannedPluginSkill]);
+
+    render(<App />);
+    fireEvent.click(screen.getByRole("button", { name: "EN" }));
+
+    const pluginButton = await screen.findByRole("button", { name: "Expand GitHub" });
+    expect(within(pluginButton).getByText("https://github.com/openai/plugins")).toBeInTheDocument();
+    expect(within(pluginButton).getByText("2 skills")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /gh-fix-ci/ })).not.toBeInTheDocument();
+
+    fireEvent.click(pluginButton);
+
+    expect(screen.getByRole("button", { name: /gh-fix-ci/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /gh-address-comments/ })).toBeInTheDocument();
   });
 
   it("switches the visible app chrome to English without changing skill data", async () => {

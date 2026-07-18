@@ -343,13 +343,13 @@ button:disabled {
   padding: 10px 12px;
 }
 
-.skill-collection {
+.skill-source-group {
   display: grid;
   gap: 6px;
   min-width: 0;
 }
 
-.skill-collection-header {
+.skill-source-group-header {
   display: grid;
   grid-template-columns: 32px minmax(0, 1fr) auto 24px;
   gap: 10px;
@@ -365,12 +365,12 @@ button:disabled {
   cursor: pointer;
 }
 
-.skill-collection-header:hover {
+.skill-source-group-header:hover {
   border-color: var(--line-strong);
   background: #f3f6fa;
 }
 
-.skill-collection-icon {
+.skill-source-group-icon {
   display: grid;
   width: 32px;
   height: 32px;
@@ -381,45 +381,57 @@ button:disabled {
   color: var(--origin-collection-text);
 }
 
-.skill-collection-main {
+.skill-source-group-icon.plugin {
+  border-color: var(--origin-plugin-border);
+  background: var(--origin-plugin-bg);
+  color: var(--origin-plugin-text);
+}
+
+.skill-source-group-icon.system {
+  border-color: var(--origin-system-border);
+  background: var(--origin-system-bg);
+  color: var(--origin-system-text);
+}
+
+.skill-source-group-main {
   display: grid;
   gap: 3px;
   min-width: 0;
 }
 
-.skill-collection-main strong,
-.skill-collection-main span {
+.skill-source-group-main strong,
+.skill-source-group-main span {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.skill-collection-main strong {
+.skill-source-group-main strong {
   font-size: 14px;
 }
 
-.skill-collection-main span {
+.skill-source-group-main span {
   color: var(--muted);
   font-size: 12px;
 }
 
-.skill-collection-count {
+.skill-source-group-count {
   color: var(--muted);
   font-size: 12px;
   font-weight: 700;
   white-space: nowrap;
 }
 
-.skill-collection-chevron {
+.skill-source-group-chevron {
   color: var(--muted);
   transition: transform 160ms ease;
 }
 
-.skill-collection.expanded .skill-collection-chevron {
+.skill-source-group.expanded .skill-source-group-chevron {
   transform: rotate(180deg);
 }
 
-.skill-collection-items {
+.skill-source-group-items {
   display: grid;
   gap: 6px;
   margin-left: 16px;

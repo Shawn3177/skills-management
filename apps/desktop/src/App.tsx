@@ -7,7 +7,7 @@ import { LanguageSwitch } from "./components/LanguageSwitch";
 import {
   hasSource,
   healthIcons,
-  SkillCollectionGroup,
+  SkillSourceGroup,
   SkillDetail,
   SkillListItem,
   StatusMessage,
@@ -131,7 +131,7 @@ function App() {
   const [query, setQuery] = useState("");
   const [skills, setSkills] = useState<SkillRecord[]>([]);
   const [selectedId, setSelectedId] = useState("");
-  const [expandedCollections, setExpandedCollections] = useState<Set<string>>(new Set());
+  const [expandedSourceGroups, setExpandedSourceGroups] = useState<Set<string>>(new Set());
   const [detailOpen, setDetailOpen] = useState(false);
   const [scanState, setScanState] = useState<ScanState>("scanning");
   const [importState, setImportState] = useState<ImportState>("idle");
@@ -417,8 +417,8 @@ function App() {
     setUtilityMessage("");
   }
 
-  function toggleCollection(collectionId: string) {
-    setExpandedCollections((current) => {
+  function toggleSourceGroup(collectionId: string) {
+    setExpandedSourceGroups((current) => {
       const next = new Set(current);
       if (next.has(collectionId)) {
         next.delete(collectionId);
@@ -856,22 +856,32 @@ function App() {
               ref={skillListRef}
               tabIndex={-1}
             >
-              {skillListGroups.map((group) =>
-                group.repository && group.skills.length > 1 ? (
-                  <SkillCollectionGroup
+              {skillListGroups.map((group) => {
+                if (group.skills.length <= 1 || !group.kind || (!group.repository && !group.plugin)) {
+                  return group.skills.map(renderSkillListItem);
+                }
+
+                const sourceName = group.repository?.name ?? group.plugin!.name;
+                const sourceDescription = group.repository
+                  ? group.repository.url ?? t("collection.localSource")
+                  : group.plugin!.repository ??
+                    [group.plugin!.publisher, "v" + group.plugin!.version].join(" · ");
+
+                return (
+                  <SkillSourceGroup
                     key={group.id}
-                    repository={group.repository}
+                    name={sourceName}
+                    description={sourceDescription}
+                    kind={group.kind}
                     skillCount={group.skills.length}
-                    expanded={query.trim().length > 0 || expandedCollections.has(group.id)}
-                    onToggle={() => toggleCollection(group.id)}
+                    expanded={query.trim().length > 0 || expandedSourceGroups.has(group.id)}
+                    onToggle={() => toggleSourceGroup(group.id)}
                     t={t}
                   >
                     {group.skills.map(renderSkillListItem)}
-                  </SkillCollectionGroup>
-                ) : (
-                  group.skills.map(renderSkillListItem)
-                ),
-              )}
+                  </SkillSourceGroup>
+                );
+              })}
               {filteredSkills.length === 0 ? (
                 <div className="empty-state">
                   <p>{t("status.empty.title")}</p>

@@ -53,6 +53,7 @@ pub struct PluginIdentity {
     pub name: String,
     pub version: String,
     pub publisher: String,
+    pub repository: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -84,6 +85,7 @@ struct PluginManifest {
     version: String,
     author: Option<PluginAuthor>,
     interface: Option<PluginInterface>,
+    repository: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -117,10 +119,25 @@ struct GithubSourceMetadata {
     repo: String,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+struct SkillLock {
+    #[serde(default)]
+    skills: BTreeMap<String, LockedSkillSource>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct LockedSkillSource {
+    source: String,
+    source_type: String,
+    source_url: String,
+}
+
 pub fn scan_default_skills() -> Vec<ScannedSkill> {
     let mut skills = scan_skill_roots(&candidate_skill_roots());
 
     if let Some(home) = home_dir() {
+        apply_skill_lock_sources(&mut skills, &home.join(".agents").join(".skill-lock.json"));
         let codex_root = home.join(".codex");
         skills.extend(scan_repository_collections(&codex_root));
         skills.extend(scan_plugin_cache(&codex_root.join("plugins").join("cache")));
@@ -248,6 +265,61 @@ fn scan_skill_dir_with_context(
     })
 }
 
+fn apply_skill_lock_sources(skills: &mut [ScannedSkill], lock_path: &Path) {
+    let Ok(contents) = fs::read_to_string(lock_path) else {
+        return;
+    };
+    let Ok(lock) = serde_json::from_str::<SkillLock>(&contents) else {
+        return;
+    };
+
+    for skill in skills {
+        if skill.origin.kind != SkillOriginKind::Standalone {
+            continue;
+        }
+
+        let folder_name = Path::new(&skill.source_path)
+            .file_name()
+            .and_then(|value| value.to_str());
+        let locked_source = folder_name
+            .and_then(|name| lock.skills.get(name))
+            .or_else(|| lock.skills.get(&skill.name));
+        let Some(repository) = locked_source.and_then(locked_repository_identity) else {
+            continue;
+        };
+
+        skill.origin.kind = SkillOriginKind::Collection;
+        skill.origin.plugin = None;
+        skill.origin.repository = Some(repository);
+    }
+}
+
+fn locked_repository_identity(source: &LockedSkillSource) -> Option<RepositoryIdentity> {
+    if !source.source_type.eq_ignore_ascii_case("github") {
+        return None;
+    }
+
+    let source_name = source.source.trim().trim_matches('/');
+    let mut parts = source_name.rsplit('/');
+    let repo = parts.next()?.trim_end_matches(".git");
+    let owner = parts.next()?;
+    if owner.is_empty() || repo.is_empty() {
+        return None;
+    }
+
+    let source_url = source
+        .source_url
+        .trim()
+        .trim_end_matches('/')
+        .trim_end_matches(".git");
+
+    Some(RepositoryIdentity {
+        id: format!("github/{}/{}", slug_id(owner), slug_id(repo)),
+        name: format!("{owner}/{repo}"),
+        url: (!source_url.is_empty()).then(|| source_url.to_string()),
+    })
+}
+
 fn scan_repository_collections(codex_root: &Path) -> Vec<ScannedSkill> {
     let target_roots = default_target_roots();
     let mut skills = Vec::new();
@@ -362,6 +434,13 @@ fn scan_plugin_cache(cache_root: &Path) -> Vec<ScannedSkill> {
             name: plugin_name,
             version,
             publisher,
+            repository: package
+                .manifest
+                .repository
+                .as_deref()
+                .map(str::trim)
+                .filter(|repository| !repository.is_empty())
+                .map(str::to_string),
         };
         let kind = plugin_origin_kind(&package.channel);
         let origin = SkillOrigin {
@@ -854,6 +933,59 @@ mod tests {
         );
     }
     #[test]
+    fn apply_skill_lock_sources_groups_github_skills_across_roots() {
+        let temp_root = unique_temp_dir("scan-skill-lock");
+        let agents_root = temp_root.join(".agents").join("skills");
+        let codex_root = temp_root.join(".codex").join("skills");
+        create_plain_skill(&agents_root, "hyperframes");
+        create_plain_skill(&codex_root, "motion-graphics");
+        let lock_path = temp_root.join(".agents").join(".skill-lock.json");
+        fs::write(
+            &lock_path,
+            serde_json::json!({
+                "skills": {
+                    "hyperframes": {
+                        "source": "heygen-com/hyperframes",
+                        "sourceType": "github",
+                        "sourceUrl": "https://github.com/heygen-com/hyperframes.git"
+                    },
+                    "motion-graphics": {
+                        "source": "heygen-com/hyperframes",
+                        "sourceType": "github",
+                        "sourceUrl": "https://github.com/heygen-com/hyperframes.git"
+                    }
+                }
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        let mut skills = scan_skill_roots(&[agents_root, codex_root]);
+        apply_skill_lock_sources(&mut skills, &lock_path);
+
+        fs::remove_dir_all(temp_root).unwrap();
+
+        assert_eq!(skills.len(), 2);
+        assert!(skills
+            .iter()
+            .all(|skill| skill.origin.kind == SkillOriginKind::Collection));
+        let repositories = skills
+            .iter()
+            .map(|skill| skill.origin.repository.as_ref().unwrap())
+            .collect::<Vec<_>>();
+        assert!(repositories
+            .iter()
+            .all(|repository| repository.id == "github/heygen-com/hyperframes"));
+        assert!(repositories
+            .iter()
+            .all(|repository| repository.name == "heygen-com/hyperframes"));
+        assert!(repositories
+            .iter()
+            .all(|repository| repository.url.as_deref()
+                == Some("https://github.com/heygen-com/hyperframes")));
+    }
+
+    #[test]
     fn scan_plugin_cache_reads_manifest_and_keeps_latest_version() {
         let cache_root = unique_temp_dir("scan-plugin-cache");
         create_plugin_skill(
@@ -887,6 +1019,10 @@ mod tests {
         assert_eq!(plugin.name, "GitHub");
         assert_eq!(plugin.version, "0.1.10");
         assert_eq!(plugin.publisher, "OpenAI");
+        assert_eq!(
+            plugin.repository.as_deref(),
+            Some("https://github.com/openai/plugins")
+        );
     }
 
     #[test]
@@ -1023,6 +1159,7 @@ mod tests {
                 "version": version,
                 "author": { "name": "OpenAI" },
                 "skills": "./skills/",
+                "repository": "https://github.com/openai/plugins",
                 "interface": { "displayName": display_name }
             })
             .to_string(),
