@@ -7,11 +7,13 @@ import {
   CircleX,
   Download,
   FolderInput,
+  Package,
+  Puzzle,
   ShieldCheck,
 } from "lucide-react";
 import type { MessageKey } from "../i18n/messages";
 import type { TFunction } from "../i18n/useLocale";
-import type { SkillHealth, SkillRecord } from "../lib/skills";
+import type { SkillHealth, SkillOriginKind, SkillRecord } from "../lib/skills";
 
 export type ImportState = "idle" | "importing" | "success" | "error";
 export type TargetActionState = "idle" | "saving" | "success" | "error";
@@ -27,6 +29,24 @@ export const healthIcons = {
   warning: CircleAlert,
   broken: CircleX,
 };
+
+export const originLabelKeys: Record<SkillOriginKind, MessageKey> = {
+  standalone: "origin.standalone",
+  plugin: "origin.plugin",
+  system: "origin.system",
+};
+
+export const originIcons = {
+  standalone: Package,
+  plugin: Puzzle,
+  system: ShieldCheck,
+};
+
+export function getSkillOriginLabel(skill: SkillRecord, t: TFunction) {
+  const kindLabel = t(originLabelKeys[skill.origin.kind]);
+
+  return skill.origin.plugin ? skill.origin.plugin.name + " · " + kindLabel : kindLabel;
+}
 
 export const toggleableTargets = [
   { id: "codex", name: "Codex" },
@@ -46,13 +66,17 @@ export function SkillListItem({
   selected,
   onSelect,
   usageLabels,
+  t,
 }: {
   skill: SkillRecord;
   selected: boolean;
   onSelect: () => void;
   usageLabels: string[];
+  t: TFunction;
 }) {
   const Icon = healthIcons[skill.health];
+  const OriginIcon = originIcons[skill.origin.kind];
+  const originLabel = getSkillOriginLabel(skill, t);
 
   return (
     <button
@@ -70,6 +94,10 @@ export function SkillListItem({
         <span>{skill.description}</span>
       </span>
       <span className="skill-row-meta">
+        <span className={"origin-pill " + skill.origin.kind} title={originLabel}>
+          <OriginIcon size={14} strokeWidth={1.9} aria-hidden="true" />
+          {originLabel}
+        </span>
         {usageLabels.map((label) => (
           <span className="usage-pill" key={label}>
             {label}
@@ -145,8 +173,11 @@ export function SkillDetail({
   t: TFunction;
 }) {
   const Icon = healthIcons[skill.health];
+  const originKindLabel = t(originLabelKeys[skill.origin.kind]);
   const importLabel =
-    hasSource(skill, "Shared Library")
+    skill.origin.kind !== "standalone"
+      ? t("actions.managedByCodex")
+      : hasSource(skill, "Shared Library")
       ? t("actions.alreadyInLibrary")
       : importState === "importing"
         ? t("actions.importing")
@@ -169,6 +200,26 @@ export function SkillDetail({
         <p className="detail-description">{skill.description}</p>
 
         <dl className="metadata-grid compact-metadata" aria-label={t("detail.metadata")}>
+          <div>
+            <dt>{t("detail.type")}</dt>
+            <dd>{originKindLabel}</dd>
+          </div>
+          {skill.origin.plugin ? (
+            <>
+              <div>
+                <dt>{t("detail.plugin")}</dt>
+                <dd>{skill.origin.plugin.name}</dd>
+              </div>
+              <div>
+                <dt>{t("detail.version")}</dt>
+                <dd>{skill.origin.plugin.version}</dd>
+              </div>
+              <div>
+                <dt>{t("detail.publisher")}</dt>
+                <dd>{skill.origin.plugin.publisher}</dd>
+              </div>
+            </>
+          ) : null}
           <div>
             <dt>{t("detail.source")}</dt>
             <dd>{skill.source}</dd>

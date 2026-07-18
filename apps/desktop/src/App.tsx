@@ -150,7 +150,10 @@ function App() {
   const visibleSkills = skills.length > 0 ? skills : demoSkills;
   const groupedSkills = useMemo(() => mergeSameNamedSkills(visibleSkills), [visibleSkills]);
   const allImportCandidates = useMemo(
-    () => mergeSameNamedSkills(skills).filter((skill) => !hasSource(skill, "Shared Library")),
+    () =>
+      mergeSameNamedSkills(skills).filter(
+        (skill) => skill.origin.kind === "standalone" && !hasSource(skill, "Shared Library"),
+      ),
     [skills],
   );
   const usingFallback = scanState === "ready" && skills.length === 0;
@@ -160,6 +163,7 @@ function App() {
   const stats = useMemo(() => getSkillStats(groupedSkills), [groupedSkills]);
   const importDisabled =
     !selectedSkill ||
+    selectedSkill.origin.kind !== "standalone" ||
     hasSource(selectedSkill, "Shared Library") ||
     scanState === "scanning" ||
     importState === "importing" ||
@@ -310,7 +314,13 @@ function App() {
   }
 
   async function importSkill(skill: SkillRecord | undefined) {
-    if (!skill || hasSource(skill, "Shared Library") || scanState === "scanning" || importState === "importing") {
+    if (
+      !skill ||
+      skill.origin.kind !== "standalone" ||
+      hasSource(skill, "Shared Library") ||
+      scanState === "scanning" ||
+      importState === "importing"
+    ) {
       return;
     }
 
@@ -823,6 +833,7 @@ function App() {
                   selected={skill.id === selectedId}
                   onSelect={() => openSkillDetail(skill.id)}
                   usageLabels={getSkillUsageLabels(skill)}
+                  t={t}
                 />
               ))}
               {filteredSkills.length === 0 ? (

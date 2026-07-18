@@ -7,6 +7,7 @@ export const demoSkills: SkillRecord[] = [
     description: "Keeps Codex work aligned with branch, PR, verification, and local-file rules.",
     source: "Codex",
     sourcePath: "C:/Users/Shawn/.codex/skills/codex-workflow-guardrails",
+    origin: { kind: "standalone", plugin: null },
     health: "healthy",
     targets: [
       { id: "codex", name: "Codex", enabled: true },
@@ -21,6 +22,7 @@ export const demoSkills: SkillRecord[] = [
     description: "Designs small, auditable tools with explicit permissions and safe fallbacks.",
     source: "Shared Library",
     sourcePath: "C:/Users/Shawn/.skills-manage/library/agent-tool-safety",
+    origin: { kind: "standalone", plugin: null },
     health: "warning",
     targets: [
       { id: "codex", name: "Codex", enabled: true },
@@ -35,6 +37,7 @@ export const demoSkills: SkillRecord[] = [
     description: "Reviews product UI for density, accessibility, hierarchy, and interaction states.",
     source: "Claude Code",
     sourcePath: "C:/Users/Shawn/.claude/skills/frontend-design-review",
+    origin: { kind: "standalone", plugin: null },
     health: "healthy",
     targets: [
       { id: "codex", name: "Codex", enabled: false },
@@ -49,6 +52,7 @@ export const demoSkills: SkillRecord[] = [
     description: "Exports skill packs, but its original source path is missing from this machine.",
     source: "Shared Library",
     sourcePath: "C:/Users/Shawn/.skills-manage/library/stale-pack-export",
+    origin: { kind: "standalone", plugin: null },
     health: "broken",
     targets: [
       { id: "codex", name: "Codex", enabled: false },
@@ -56,5 +60,28 @@ export const demoSkills: SkillRecord[] = [
       { id: "vs-code", name: "VS Code", enabled: false },
     ],
     supportFiles: ["SKILL.md", "manifest.json"],
+  },
+  {
+    id: "plugin:openai/github/gh-fix-ci",
+    name: "gh-fix-ci",
+    description: "Diagnoses failing GitHub Actions checks and prepares a focused fix.",
+    source: "Codex",
+    sourcePath: "C:/Users/Shawn/.codex/plugins/cache/openai-curated-remote/github/0.1.8/skills/gh-fix-ci",
+    origin: {
+      kind: "plugin",
+      plugin: {
+        id: "openai/github",
+        name: "GitHub",
+        version: "0.1.8",
+        publisher: "OpenAI",
+      },
+    },
+    health: "healthy",
+    targets: [
+      { id: "codex", name: "Codex", enabled: true },
+      { id: "claude-code", name: "Claude Code", enabled: false },
+      { id: "vs-code", name: "VS Code", enabled: false },
+    ],
+    supportFiles: ["SKILL.md"],
   },
 ];

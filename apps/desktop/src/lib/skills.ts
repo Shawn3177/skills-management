@@ -1,4 +1,17 @@
 export type SkillHealth = "healthy" | "warning" | "broken";
+export type SkillOriginKind = "standalone" | "plugin" | "system";
+
+export interface PluginIdentity {
+  id: string;
+  name: string;
+  version: string;
+  publisher: string;
+}
+
+export interface SkillOrigin {
+  kind: SkillOriginKind;
+  plugin: PluginIdentity | null;
+}
 
 export interface TargetState {
   id: string;
@@ -12,6 +25,7 @@ export interface SkillRecord {
   description: string;
   source: string;
   sourcePath: string;
+  origin: SkillOrigin;
   health: SkillHealth;
   targets: TargetState[];
   supportFiles: string[];
@@ -43,6 +57,11 @@ export function filterSkills(records: SkillRecord[], query: string): SkillRecord
       record.description,
       record.source,
       record.sourcePath,
+      record.origin.kind,
+      record.origin.plugin?.id ?? "",
+      record.origin.plugin?.name ?? "",
+      record.origin.plugin?.version ?? "",
+      record.origin.plugin?.publisher ?? "",
       record.supportFiles.join(" "),
     ]
       .join(" ")
@@ -133,7 +152,12 @@ function mergeTargets(records: SkillRecord[]): TargetState[] {
 }
 
 function mergeGroupKey(record: SkillRecord): string {
-  return `${normalizedMergeText(record.name)}\u0000${normalizedMergeText(record.description)}`;
+  const originGroup =
+    record.origin.kind === "standalone"
+      ? "standalone"
+      : record.origin.kind + ":" + (record.origin.plugin?.id ?? "codex-system");
+
+  return [originGroup, normalizedMergeText(record.name), normalizedMergeText(record.description)].join("\u0000");
 }
 
 function normalizedMergeText(value: string): string {

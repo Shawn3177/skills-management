@@ -14,6 +14,7 @@ const scannedCodexSkill = {
   description: "Loaded from a local SKILL.md file.",
   source: "Codex",
   sourcePath: "C:/Users/example/.codex/skills/local-scan-skill",
+  origin: { kind: "standalone", plugin: null },
   health: "healthy",
   targets: [
     { id: "codex", name: "Codex", enabled: true },
@@ -21,6 +22,23 @@ const scannedCodexSkill = {
     { id: "vs-code", name: "VS Code", enabled: false },
   ],
   supportFiles: ["SKILL.md"],
+};
+
+const scannedPluginSkill = {
+  ...scannedCodexSkill,
+  id: "plugin:openai/github/gh-fix-ci",
+  name: "gh-fix-ci",
+  description: "Diagnoses failing GitHub Actions checks.",
+  sourcePath: "C:/Users/example/.codex/plugins/cache/openai-curated-remote/github/0.1.8/skills/gh-fix-ci",
+  origin: {
+    kind: "plugin",
+    plugin: {
+      id: "openai/github",
+      name: "GitHub",
+      version: "0.1.8",
+      publisher: "OpenAI",
+    },
+  },
 };
 
 const sharedLibrarySkill = {
@@ -103,6 +121,28 @@ describe("App", () => {
 
     await waitFor(() => expect(screen.getAllByText("local-scan-skill").length).toBeGreaterThan(0));
     expect(invokeMock).toHaveBeenCalledWith("scan_skills");
+  });
+
+  it("distinguishes standalone and plugin skills in the list and details", async () => {
+    invokeMock.mockResolvedValue([scannedCodexSkill, scannedPluginSkill]);
+
+    render(<App />);
+    await waitFor(() => expect(screen.getAllByText("gh-fix-ci").length).toBeGreaterThan(0));
+    fireEvent.click(screen.getByRole("button", { name: "EN" }));
+
+    const standaloneRow = screen.getByRole("button", { name: /local-scan-skill/ });
+    expect(within(standaloneRow).getByText("Standalone skill")).toBeInTheDocument();
+
+    const pluginRow = screen.getByRole("button", { name: /gh-fix-ci/ });
+    expect(within(pluginRow).getByText("GitHub · Plugin skill")).toBeInTheDocument();
+    fireEvent.click(pluginRow);
+
+    const detail = screen.getByRole("region", { name: "Skill detail" });
+    expect(within(detail).getByText("Plugin skill")).toBeInTheDocument();
+    expect(within(detail).getByText("GitHub")).toBeInTheDocument();
+    expect(within(detail).getByText("0.1.8")).toBeInTheDocument();
+    expect(within(detail).getByText("OpenAI")).toBeInTheDocument();
+    expect(within(detail).getByRole("button", { name: "Managed by Codex" })).toBeDisabled();
   });
 
   it("switches the visible app chrome to English without changing skill data", async () => {
@@ -704,14 +744,14 @@ describe("App", () => {
     expect(screen.getAllByText("Shared Library").length).toBeGreaterThan(0);
   });
 
-  it("imports all local skills into the shared library from one action", async () => {
+  it("imports all standalone skills without copying Codex plugin skills", async () => {
     let scanCount = 0;
     invokeMock.mockImplementation((command: string, args?: { sourcePath?: string }) => {
       if (command === "scan_skills") {
         scanCount += 1;
         return Promise.resolve(
           scanCount === 1
-            ? [scannedCodexSkill, secondScannedSkill]
+            ? [scannedCodexSkill, secondScannedSkill, scannedPluginSkill]
             : [sharedLibrarySkill, secondSharedLibrarySkill],
         );
       }

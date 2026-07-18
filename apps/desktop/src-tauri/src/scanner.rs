@@ -1,6 +1,8 @@
 use crate::fs_ops::home_dir;
 use crate::targets::is_managed_target_copy;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
+use std::cmp::Ordering;
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -12,9 +14,34 @@ pub struct ScannedSkill {
     pub description: String,
     pub source: String,
     pub source_path: String,
+    pub origin: SkillOrigin,
     pub health: SkillHealth,
     pub targets: Vec<TargetState>,
     pub support_files: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SkillOrigin {
+    pub kind: SkillOriginKind,
+    pub plugin: Option<PluginIdentity>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SkillOriginKind {
+    Standalone,
+    Plugin,
+    System,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginIdentity {
+    pub id: String,
+    pub name: String,
+    pub version: String,
+    pub publisher: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -39,17 +66,54 @@ struct SkillMetadata {
     description: Option<String>,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+struct PluginManifest {
+    name: String,
+    #[serde(default)]
+    version: String,
+    author: Option<PluginAuthor>,
+    interface: Option<PluginInterface>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct PluginAuthor {
+    name: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PluginInterface {
+    display_name: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+struct PluginPackage {
+    channel: String,
+    package_root: PathBuf,
+    manifest: PluginManifest,
+}
+
 pub fn scan_default_skills() -> Vec<ScannedSkill> {
-    let roots = candidate_skill_roots();
-    scan_skill_roots(&roots)
+    let mut skills = scan_skill_roots(&candidate_skill_roots());
+
+    if let Some(home) = home_dir() {
+        skills.extend(scan_plugin_cache(
+            &home.join(".codex").join("plugins").join("cache"),
+        ));
+    }
+
+    sort_skills(&mut skills);
+    skills
 }
 
 pub fn candidate_skill_roots() -> Vec<PathBuf> {
     let mut roots = Vec::new();
 
     if let Some(home) = home_dir() {
+        let codex_skills = home.join(".codex").join("skills");
         roots.push(home.join(".agents").join("skills"));
-        roots.push(home.join(".codex").join("skills"));
+        roots.push(codex_skills.clone());
+        roots.push(codex_skills.join(".system"));
         roots.push(home.join(".claude").join("skills"));
         roots.push(home.join(".skills-manage").join("library"));
     }
@@ -90,7 +154,7 @@ pub fn scan_skill_roots_with_target_roots(
         }
     }
 
-    skills.sort_by(|left, right| left.name.to_lowercase().cmp(&right.name.to_lowercase()));
+    sort_skills(&mut skills);
     skills
 }
 
@@ -100,6 +164,25 @@ fn scan_skill_dir(
     skill_file: &Path,
     target_roots: &[(&str, PathBuf)],
 ) -> Option<ScannedSkill> {
+    let source = source_label(root);
+    scan_skill_dir_with_context(
+        skill_dir,
+        skill_file,
+        &source,
+        skill_origin_for_root(root),
+        None,
+        target_roots,
+    )
+}
+
+fn scan_skill_dir_with_context(
+    skill_dir: &Path,
+    skill_file: &Path,
+    source: &str,
+    origin: SkillOrigin,
+    id_prefix: Option<&str>,
+    target_roots: &[(&str, PathBuf)],
+) -> Option<ScannedSkill> {
     let directory_name = skill_dir
         .file_name()
         .and_then(|value| value.to_str())
@@ -107,13 +190,14 @@ fn scan_skill_dir(
         .to_string();
     let Ok(contents) = fs::read_to_string(skill_file) else {
         return Some(ScannedSkill {
-            id: slug_id(&directory_name),
+            id: skill_id(id_prefix, &directory_name),
             name: directory_name,
             description: "SKILL.md could not be read.".to_string(),
-            source: source_label(root),
+            source: source.to_string(),
             source_path: skill_dir.display().to_string(),
+            origin,
             health: SkillHealth::Broken,
-            targets: target_states(root, skill_dir, target_roots),
+            targets: target_states(source, skill_dir, target_roots),
             support_files: support_files(skill_dir),
         });
     };
@@ -126,17 +210,223 @@ fn scan_skill_dir(
     let name = metadata.name.unwrap_or_else(|| directory_name.clone());
 
     Some(ScannedSkill {
-        id: slug_id(&name),
+        id: skill_id(id_prefix, &name),
         name,
         description: metadata
             .description
             .unwrap_or_else(|| "No description provided.".to_string()),
-        source: source_label(root),
+        source: source.to_string(),
         source_path: skill_dir.display().to_string(),
+        origin,
         health,
-        targets: target_states(root, skill_dir, target_roots),
+        targets: target_states(source, skill_dir, target_roots),
         support_files: support_files(skill_dir),
     })
+}
+
+fn scan_plugin_cache(cache_root: &Path) -> Vec<ScannedSkill> {
+    let target_roots = default_target_roots();
+    let mut skills = Vec::new();
+
+    for package in latest_plugin_packages(cache_root) {
+        let skills_root = package.package_root.join("skills");
+        let Ok(entries) = fs::read_dir(&skills_root) else {
+            continue;
+        };
+
+        let publisher = package
+            .manifest
+            .author
+            .as_ref()
+            .map(|author| author.name.trim())
+            .filter(|name| !name.is_empty())
+            .unwrap_or("Unknown publisher")
+            .to_string();
+        let plugin_name = package
+            .manifest
+            .interface
+            .as_ref()
+            .and_then(|interface| interface.display_name.as_deref())
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+            .unwrap_or(package.manifest.name.as_str())
+            .to_string();
+        let version = if package.manifest.version.trim().is_empty() {
+            package
+                .package_root
+                .file_name()
+                .and_then(|value| value.to_str())
+                .unwrap_or("unknown")
+                .to_string()
+        } else {
+            package.manifest.version.clone()
+        };
+        let plugin = PluginIdentity {
+            id: format!(
+                "{}/{}",
+                slug_id(&publisher),
+                slug_id(&package.manifest.name)
+            ),
+            name: plugin_name,
+            version,
+            publisher,
+        };
+        let kind = plugin_origin_kind(&package.channel);
+        let origin = SkillOrigin {
+            kind,
+            plugin: Some(plugin.clone()),
+        };
+        let id_prefix = format!(
+            "{}:{}",
+            match kind {
+                SkillOriginKind::System => "system",
+                SkillOriginKind::Plugin => "plugin",
+                SkillOriginKind::Standalone => "skill",
+            },
+            plugin.id
+        );
+
+        for entry in entries.flatten() {
+            let skill_dir = entry.path();
+            if !skill_dir.is_dir() {
+                continue;
+            }
+
+            let skill_file = skill_dir.join("SKILL.md");
+            if !skill_file.is_file() {
+                continue;
+            }
+
+            if let Some(skill) = scan_skill_dir_with_context(
+                &skill_dir,
+                &skill_file,
+                "Codex",
+                origin.clone(),
+                Some(&id_prefix),
+                &target_roots,
+            ) {
+                skills.push(skill);
+            }
+        }
+    }
+
+    sort_skills(&mut skills);
+    skills
+}
+
+fn latest_plugin_packages(cache_root: &Path) -> Vec<PluginPackage> {
+    let mut packages = BTreeMap::<String, PluginPackage>::new();
+    let Ok(channels) = fs::read_dir(cache_root) else {
+        return Vec::new();
+    };
+
+    for channel_entry in channels.flatten() {
+        let channel_root = channel_entry.path();
+        if !channel_root.is_dir() {
+            continue;
+        }
+        let channel = channel_entry.file_name().to_string_lossy().to_string();
+        let Ok(plugin_dirs) = fs::read_dir(&channel_root) else {
+            continue;
+        };
+
+        for plugin_entry in plugin_dirs.flatten() {
+            let plugin_root = plugin_entry.path();
+            if !plugin_root.is_dir() {
+                continue;
+            }
+            let Ok(version_dirs) = fs::read_dir(&plugin_root) else {
+                continue;
+            };
+
+            for version_entry in version_dirs.flatten() {
+                let package_root = version_entry.path();
+                if !package_root.is_dir()
+                    || version_entry
+                        .file_name()
+                        .to_string_lossy()
+                        .eq_ignore_ascii_case("latest")
+                {
+                    continue;
+                }
+
+                let manifest_path = package_root.join(".codex-plugin").join("plugin.json");
+                let Ok(contents) = fs::read_to_string(manifest_path) else {
+                    continue;
+                };
+                let Ok(manifest) = serde_json::from_str::<PluginManifest>(&contents) else {
+                    continue;
+                };
+                if manifest.name.trim().is_empty() {
+                    continue;
+                }
+
+                let publisher = manifest
+                    .author
+                    .as_ref()
+                    .map(|author| author.name.trim().to_lowercase())
+                    .filter(|name| !name.is_empty())
+                    .unwrap_or_else(|| channel.to_lowercase());
+                let key = format!("{publisher}/{}", manifest.name.trim().to_lowercase());
+                let candidate = PluginPackage {
+                    channel: channel.clone(),
+                    package_root,
+                    manifest,
+                };
+                let should_replace = packages.get(&key).is_none_or(|existing| {
+                    match natural_version_cmp(
+                        &candidate.manifest.version,
+                        &existing.manifest.version,
+                    ) {
+                        Ordering::Greater => true,
+                        Ordering::Equal => candidate.package_root > existing.package_root,
+                        Ordering::Less => false,
+                    }
+                });
+
+                if should_replace {
+                    packages.insert(key, candidate);
+                }
+            }
+        }
+    }
+
+    packages.into_values().collect()
+}
+
+fn natural_version_cmp(left: &str, right: &str) -> Ordering {
+    let left_numbers = numeric_version_parts(left);
+    let right_numbers = numeric_version_parts(right);
+
+    left_numbers
+        .cmp(&right_numbers)
+        .then_with(|| left.cmp(right))
+}
+
+fn numeric_version_parts(value: &str) -> Vec<u64> {
+    value
+        .split(|character: char| !character.is_ascii_digit())
+        .filter(|part| !part.is_empty())
+        .filter_map(|part| part.parse::<u64>().ok())
+        .collect()
+}
+
+fn plugin_origin_kind(channel: &str) -> SkillOriginKind {
+    match channel.to_lowercase().as_str() {
+        "openai-bundled" | "openai-primary-runtime" => SkillOriginKind::System,
+        _ => SkillOriginKind::Plugin,
+    }
+}
+
+fn skill_origin_for_root(root: &Path) -> SkillOrigin {
+    let normalized = normalized_path(root);
+    let kind = if normalized.contains("/.codex/skills/.system") {
+        SkillOriginKind::System
+    } else {
+        SkillOriginKind::Standalone
+    };
+
+    SkillOrigin { kind, plugin: None }
 }
 
 fn parse_skill_metadata(contents: &str) -> SkillMetadata {
@@ -196,7 +486,7 @@ fn support_files(skill_dir: &Path) -> Vec<String> {
 }
 
 fn source_label(root: &Path) -> String {
-    let normalized = root.to_string_lossy().replace('\\', "/").to_lowercase();
+    let normalized = normalized_path(root);
 
     if normalized.contains("/.codex/skills") {
         "Codex".to_string()
@@ -211,12 +501,15 @@ fn source_label(root: &Path) -> String {
     }
 }
 
+fn normalized_path(path: &Path) -> String {
+    path.to_string_lossy().replace('\\', "/").to_lowercase()
+}
+
 fn target_states(
-    root: &Path,
+    source: &str,
     skill_dir: &Path,
     target_roots: &[(&str, PathBuf)],
 ) -> Vec<TargetState> {
-    let source = source_label(root);
     let skill_folder = skill_dir
         .file_name()
         .and_then(|value| value.to_str())
@@ -232,7 +525,7 @@ fn target_states(
         id: target_id.to_string(),
         name: target_name.to_string(),
         enabled: target_enabled(
-            &source,
+            source,
             skill_dir,
             skill_folder,
             target_id,
@@ -279,6 +572,14 @@ fn default_target_roots() -> Vec<(&'static str, PathBuf)> {
     ]
 }
 
+fn skill_id(prefix: Option<&str>, value: &str) -> String {
+    let slug = slug_id(value);
+
+    prefix
+        .map(|prefix| format!("{prefix}/{slug}"))
+        .unwrap_or(slug)
+}
+
 fn slug_id(value: &str) -> String {
     value
         .chars()
@@ -296,6 +597,14 @@ fn slug_id(value: &str) -> String {
         .join("-")
 }
 
+fn sort_skills(skills: &mut [ScannedSkill]) {
+    skills.sort_by(|left, right| {
+        left.name
+            .to_lowercase()
+            .cmp(&right.name.to_lowercase())
+            .then_with(|| left.id.cmp(&right.id))
+    });
+}
 
 #[cfg(test)]
 mod tests {
@@ -324,8 +633,89 @@ mod tests {
         assert_eq!(skills[0].name, "agent-tool-safety");
         assert_eq!(skills[0].description, "Designs safe tools");
         assert_eq!(skills[0].health, SkillHealth::Healthy);
+        assert_eq!(skills[0].origin.kind, SkillOriginKind::Standalone);
+        assert_eq!(skills[0].origin.plugin, None);
         assert!(skills[0].support_files.contains(&"SKILL.md".to_string()));
         assert!(skills[0].support_files.contains(&"notes.md".to_string()));
+    }
+
+    #[test]
+    fn scan_skill_roots_marks_codex_system_skills() {
+        let temp_root = unique_temp_dir("scan-system-skill");
+        let root = temp_root.join(".codex").join("skills").join(".system");
+        let skill_dir = root.join("skill-installer");
+        fs::create_dir_all(&skill_dir).unwrap();
+        fs::write(
+            skill_dir.join("SKILL.md"),
+            "---\nname: skill-installer\ndescription: Installs Codex skills\n---\n",
+        )
+        .unwrap();
+
+        let skills = scan_skill_roots(&[root]);
+
+        fs::remove_dir_all(temp_root).unwrap();
+
+        assert_eq!(skills.len(), 1);
+        assert_eq!(skills[0].source, "Codex");
+        assert_eq!(skills[0].origin.kind, SkillOriginKind::System);
+        assert_eq!(skills[0].origin.plugin, None);
+    }
+
+    #[test]
+    fn scan_plugin_cache_reads_manifest_and_keeps_latest_version() {
+        let cache_root = unique_temp_dir("scan-plugin-cache");
+        create_plugin_skill(
+            &cache_root,
+            "openai-curated-remote",
+            "github",
+            "0.1.8",
+            "GitHub",
+            "gh-fix-ci",
+        );
+        create_plugin_skill(
+            &cache_root,
+            "openai-curated",
+            "github",
+            "0.1.10",
+            "GitHub",
+            "gh-fix-ci",
+        );
+
+        let skills = scan_plugin_cache(&cache_root);
+
+        fs::remove_dir_all(cache_root).unwrap();
+
+        assert_eq!(skills.len(), 1);
+        assert_eq!(skills[0].source, "Codex");
+        assert_eq!(skills[0].origin.kind, SkillOriginKind::Plugin);
+        assert_eq!(skills[0].targets[0].id, "codex");
+        assert!(skills[0].targets[0].enabled);
+        let plugin = skills[0].origin.plugin.as_ref().unwrap();
+        assert_eq!(plugin.id, "openai/github");
+        assert_eq!(plugin.name, "GitHub");
+        assert_eq!(plugin.version, "0.1.10");
+        assert_eq!(plugin.publisher, "OpenAI");
+    }
+
+    #[test]
+    fn scan_plugin_cache_marks_bundled_packages_as_system() {
+        let cache_root = unique_temp_dir("scan-bundled-plugin");
+        create_plugin_skill(
+            &cache_root,
+            "openai-bundled",
+            "browser",
+            "26.707.31428",
+            "Browser",
+            "browser",
+        );
+
+        let skills = scan_plugin_cache(&cache_root);
+
+        fs::remove_dir_all(cache_root).unwrap();
+
+        assert_eq!(skills.len(), 1);
+        assert_eq!(skills[0].origin.kind, SkillOriginKind::System);
+        assert_eq!(skills[0].origin.plugin.as_ref().unwrap().name, "Browser");
     }
 
     #[test]
@@ -409,5 +799,37 @@ mod tests {
             .unwrap()
             .as_nanos();
         std::env::temp_dir().join(format!("skills-manage-{prefix}-{stamp}"))
+    }
+
+    fn create_plugin_skill(
+        cache_root: &Path,
+        channel: &str,
+        plugin_id: &str,
+        version: &str,
+        display_name: &str,
+        skill_name: &str,
+    ) {
+        let package_root = cache_root.join(channel).join(plugin_id).join(version);
+        let manifest_dir = package_root.join(".codex-plugin");
+        let skill_dir = package_root.join("skills").join(skill_name);
+        fs::create_dir_all(&manifest_dir).unwrap();
+        fs::create_dir_all(&skill_dir).unwrap();
+        fs::write(
+            manifest_dir.join("plugin.json"),
+            serde_json::json!({
+                "name": plugin_id,
+                "version": version,
+                "author": { "name": "OpenAI" },
+                "skills": "./skills/",
+                "interface": { "displayName": display_name }
+            })
+            .to_string(),
+        )
+        .unwrap();
+        fs::write(
+            skill_dir.join("SKILL.md"),
+            format!("---\nname: {skill_name}\ndescription: Plugin skill\n---\n"),
+        )
+        .unwrap();
     }
 }

@@ -35,6 +35,7 @@ export type MessageKey =
   | "actions.importAllToLibrary"
   | "actions.importing"
   | "actions.alreadyInLibrary"
+  | "actions.managedByCodex"
   | "actions.backToSkills"
   | "actions.repair"
   | "actions.exportSkillpack"
@@ -111,7 +112,14 @@ export type MessageKey =
   | "health.warning"
   | "health.broken"
   | "drawer.selectedSkill"
+  | "origin.standalone"
+  | "origin.plugin"
+  | "origin.system"
   | "detail.metadata"
+  | "detail.type"
+  | "detail.plugin"
+  | "detail.version"
+  | "detail.publisher"
   | "detail.source"
   | "detail.path"
   | "detail.supportFiles"
@@ -163,6 +171,7 @@ export const messages: Record<Locale, Record<MessageKey, string>> = {
     "actions.importAllToLibrary": "全部导入",
     "actions.importing": "导入中",
     "actions.alreadyInLibrary": "已在共享库",
+    "actions.managedByCodex": "由 Codex 管理",
     "actions.backToSkills": "返回技能列表",
     "actions.repair": "修复",
     "actions.exportSkillpack": "导出 .skillpack",
@@ -239,7 +248,14 @@ export const messages: Record<Locale, Record<MessageKey, string>> = {
     "health.warning": "需检查",
     "health.broken": "损坏",
     "drawer.selectedSkill": "已选择技能",
+    "origin.standalone": "独立 Skill",
+    "origin.plugin": "插件 Skill",
+    "origin.system": "系统 Skill",
     "detail.metadata": "元数据",
+    "detail.type": "类型",
+    "detail.plugin": "所属插件",
+    "detail.version": "版本",
+    "detail.publisher": "开发者",
     "detail.source": "来源",
     "detail.path": "路径",
     "detail.supportFiles": "支持文件",
@@ -288,6 +304,7 @@ export const messages: Record<Locale, Record<MessageKey, string>> = {
     "actions.importAllToLibrary": "Import all",
     "actions.importing": "Importing",
     "actions.alreadyInLibrary": "Already in library",
+    "actions.managedByCodex": "Managed by Codex",
     "actions.backToSkills": "Back to skills",
     "actions.repair": "Repair",
     "actions.exportSkillpack": "Export .skillpack",
@@ -364,7 +381,14 @@ export const messages: Record<Locale, Record<MessageKey, string>> = {
     "health.warning": "Needs review",
     "health.broken": "Broken",
     "drawer.selectedSkill": "Selected skill",
+    "origin.standalone": "Standalone skill",
+    "origin.plugin": "Plugin skill",
+    "origin.system": "System skill",
     "detail.metadata": "Metadata",
+    "detail.type": "Type",
+    "detail.plugin": "Plugin",
+    "detail.version": "Version",
+    "detail.publisher": "Publisher",
     "detail.source": "Source",
     "detail.path": "Path",
     "detail.supportFiles": "Support files",

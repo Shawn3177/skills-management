@@ -8,6 +8,7 @@ const records: SkillRecord[] = [
     description: "Codex UI and workflow guardrails",
     source: "Codex",
     sourcePath: "C:/Users/example/.codex/skills/codex-style",
+    origin: { kind: "standalone", plugin: null },
     health: "healthy",
     targets: [
       { id: "codex", name: "Codex", enabled: true },
@@ -21,17 +22,36 @@ const records: SkillRecord[] = [
     description: "Reusable agent tool design rules",
     source: "Shared Library",
     sourcePath: "C:/Users/example/.skills-manage/library/agent-pack",
+    origin: { kind: "standalone", plugin: null },
     health: "warning",
     targets: [{ id: "codex", name: "Codex", enabled: false }],
     supportFiles: ["SKILL.md"],
   },
 ];
 
+const pluginRecord: SkillRecord = {
+  ...records[0],
+  id: "plugin:openai/github/gh-fix-ci",
+  name: "gh-fix-ci",
+  sourcePath: "C:/Users/example/.codex/plugins/cache/openai-curated-remote/github/0.1.8/skills/gh-fix-ci",
+  origin: {
+    kind: "plugin",
+    plugin: {
+      id: "openai/github",
+      name: "GitHub",
+      version: "0.1.8",
+      publisher: "OpenAI",
+    },
+  },
+};
+
 describe("filterSkills", () => {
   it("matches name, description, source, and path without case sensitivity", () => {
     expect(filterSkills(records, "WORKFLOW")).toHaveLength(1);
     expect(filterSkills(records, "shared")).toHaveLength(1);
     expect(filterSkills(records, ".codex")).toHaveLength(1);
+    expect(filterSkills([...records, pluginRecord], "github")).toEqual([pluginRecord]);
+    expect(filterSkills([...records, pluginRecord], "0.1.8")).toEqual([pluginRecord]);
   });
 
   it("returns all records for a blank query", () => {
@@ -67,6 +87,19 @@ describe("mergeSameNamedSkills", () => {
     expect(merged[0].source).toBe("Codex, Shared Library");
     expect(merged[0].sourcePath).toBe(sharedRecord.sourcePath);
     expect(merged[0].targets.find((target) => target.id === "codex")?.enabled).toBe(true);
+  });
+
+  it("keeps plugin skills separate from standalone copies", () => {
+    const sameNamedPlugin = {
+      ...pluginRecord,
+      name: records[0].name,
+      description: records[0].description,
+    };
+
+    const merged = mergeSameNamedSkills([records[0], sameNamedPlugin]);
+
+    expect(merged).toHaveLength(2);
+    expect(merged.map((record) => record.origin.kind)).toEqual(["standalone", "plugin"]);
   });
 
   it("keeps same-named records separate when descriptions show different skills", () => {
