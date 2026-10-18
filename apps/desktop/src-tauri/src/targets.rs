@@ -154,9 +154,9 @@ pub fn is_managed_target_copy(target_dir: &Path, source_path: &Path, target_id: 
     marker_matches(target_dir, &source_canonical, target_id)
 }
 
-/// Target ids that support real enable/disable (VS Code is still pending).
+/// Target ids that support real enable/disable.
 pub fn toggleable_target_ids() -> &'static [&'static str] {
-    &["codex", "claude-code"]
+    &["codex", "claude-code", "vs-code"]
 }
 
 /// The real, home-based skills-folder root for a toggleable target.
@@ -374,6 +374,13 @@ fn target_profile(target_id: &str) -> Result<TargetProfile, String> {
             id: "claude-code",
             name: "Claude Code",
             root: home.join(".claude").join("skills"),
+        }),
+        // GitHub Copilot in VS Code reads personal skills from here. It also reads
+        // ~/.claude/skills, so a skill enabled for Claude Code shows up in VS Code too.
+        "vs-code" => Ok(TargetProfile {
+            id: "vs-code",
+            name: "VS Code",
+            root: home.join(".copilot").join("skills"),
         }),
         other => Err(format!("Unsupported target id: {other}")),
     }
@@ -678,6 +685,51 @@ mod tests {
             .join("bulk-two")
             .join(".skills-manage-link.json")
             .is_file());
+
+        fs::remove_dir_all(data_root).unwrap();
+        fs::remove_dir_all(target_root).unwrap();
+    }
+
+    #[test]
+    fn vs_code_target_uses_copilot_skills_folder() {
+        let root = target_root_for("vs-code").unwrap();
+
+        assert!(root.ends_with(Path::new(".copilot").join("skills")));
+        assert_eq!(target_name_for("vs-code"), Some("VS Code"));
+        assert!(toggleable_target_ids().contains(&"vs-code"));
+    }
+
+    #[test]
+    fn enables_and_disables_skill_for_vs_code() {
+        let data_root = unique_temp_dir("data-root-vs-code");
+        let library_skill = create_library_skill(&data_root, "vs-code-skill");
+        let target_root = unique_temp_dir("copilot-target-root");
+
+        let enabled = set_skill_target_enabled_with_root(
+            &library_skill,
+            "vs-code",
+            true,
+            &data_root,
+            &target_root,
+        )
+        .unwrap();
+        assert!(enabled.changed);
+        assert!(is_managed_target_copy(
+            &target_root.join("vs-code-skill"),
+            &library_skill,
+            "vs-code"
+        ));
+
+        let disabled = set_skill_target_enabled_with_root(
+            &library_skill,
+            "vs-code",
+            false,
+            &data_root,
+            &target_root,
+        )
+        .unwrap();
+        assert!(disabled.changed);
+        assert!(!target_root.join("vs-code-skill").exists());
 
         fs::remove_dir_all(data_root).unwrap();
         fs::remove_dir_all(target_root).unwrap();

@@ -50,6 +50,7 @@ export const originIcons = {
 export const toggleableTargets = [
   { id: "codex", name: "Codex" },
   { id: "claude-code", name: "Claude Code" },
+  { id: "vs-code", name: "VS Code" },
 ];
 export const toggleableTargetIds = new Set(toggleableTargets.map((target) => target.id));
 
@@ -338,7 +339,9 @@ export function SkillDetail({
                   ? t("targets.pending")
                   : target.enabled
                     ? t("targets.enabled")
-                    : t("targets.disabled");
+                    : target.id === "vs-code" && skill.targets.some((entry) => entry.id === "claude-code" && entry.enabled)
+                      ? t("targets.vsCodeViaClaude")
+                      : t("targets.disabled");
             const handleTargetClick = () => {
               if (canToggle) {
                 onToggleTarget(target);

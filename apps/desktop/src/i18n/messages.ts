@@ -146,6 +146,7 @@ export type MessageKey =
   | "targets.disabled"
   | "targets.unavailable"
   | "targets.pending"
+  | "targets.vsCodeViaClaude"
   | "targets.importRequiredAction"
   | "targets.pendingAction"
   | "footer.dataRoot"
@@ -300,6 +301,7 @@ export const messages: Record<Locale, Record<MessageKey, string>> = {
     "targets.disabled": "未为此工具启用",
     "targets.unavailable": "先导入共享库后可启用",
     "targets.pending": "此工具开关待接入",
+    "targets.vsCodeViaClaude": "未单独启用，VS Code 会读取 Claude Code 里的副本",
     "targets.importRequiredAction": "先将 {skillName} 导入共享库，再为 {targetName} 启用或停用。",
     "targets.pendingAction": "{targetName} 的启用开关正在等待后端接入。",
     "footer.dataRoot": "数据根目录",
@@ -451,6 +453,7 @@ export const messages: Record<Locale, Record<MessageKey, string>> = {
     "targets.disabled": "Not enabled for this tool",
     "targets.unavailable": "Import to the shared library before enabling",
     "targets.pending": "Target switch pending",
+    "targets.vsCodeViaClaude": "Not enabled here; VS Code reads the Claude Code copy",
     "targets.importRequiredAction": "Import {skillName} into the shared library before changing {targetName}.",
     "targets.pendingAction": "{targetName} switching is waiting for the backend.",
     "footer.dataRoot": "Data root",

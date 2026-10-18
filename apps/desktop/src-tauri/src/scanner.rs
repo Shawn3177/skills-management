@@ -156,6 +156,7 @@ pub fn candidate_skill_roots() -> Vec<PathBuf> {
         roots.push(codex_skills.clone());
         roots.push(codex_skills.join(".system"));
         roots.push(home.join(".claude").join("skills"));
+        roots.push(home.join(".copilot").join("skills"));
         roots.push(home.join(".skills-manage").join("library"));
     }
 
@@ -701,6 +702,8 @@ fn source_label(root: &Path) -> String {
         "Codex".to_string()
     } else if normalized.contains("/.claude/skills") {
         "Claude Code".to_string()
+    } else if normalized.contains("/.copilot/skills") {
+        "VS Code".to_string()
     } else if normalized.contains("/.agents/skills") {
         "Agent Skills".to_string()
     } else if normalized.contains("/.skills-manage/library") {
@@ -778,6 +781,7 @@ fn default_target_roots() -> Vec<(&'static str, PathBuf)> {
     vec![
         ("codex", home.join(".codex").join("skills")),
         ("claude-code", home.join(".claude").join("skills")),
+        ("vs-code", home.join(".copilot").join("skills")),
     ]
 }
 

@@ -1037,4 +1037,47 @@ describe("App", () => {
     await waitFor(() => expect(screen.getByText(/已为 Codex 启用 local-scan-skill/i)).toBeInTheDocument());
     expect(screen.getByRole("button", { name: "停用 Codex" })).toBeInTheDocument();
   });
+
+  it("toggles VS Code and notes when it already reads the Claude Code copy", async () => {
+    const claudeEnabledSkill = {
+      ...sharedLibrarySkill,
+      targets: sharedLibrarySkill.targets.map((target) =>
+        target.id === "claude-code" ? { ...target, enabled: true } : target,
+      ),
+    };
+    invokeMock.mockImplementation((command: string) => {
+      if (command === "scan_skills") {
+        return Promise.resolve([claudeEnabledSkill]);
+      }
+
+      if (command === "set_skill_target_enabled") {
+        return Promise.resolve({
+          targetId: "vs-code",
+          targetName: "VS Code",
+          skillName: "local-scan-skill",
+          enabled: true,
+          changed: true,
+          targetPath: "C:/Users/example/.copilot/skills/local-scan-skill",
+          message: "Enabled local-scan-skill for VS Code.",
+        });
+      }
+
+      return Promise.reject(new Error(`Unexpected command: ${command}`));
+    });
+
+    render(<App />);
+    await waitFor(() => expect(screen.getAllByText("local-scan-skill").length).toBeGreaterThan(0));
+    openLocalScanSkill();
+
+    expect(screen.getByText(messages["zh-CN"]["targets.vsCodeViaClaude"])).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "启用 VS Code" }));
+
+    await waitFor(() =>
+      expect(invokeMock).toHaveBeenCalledWith("set_skill_target_enabled", {
+        sourcePath: sharedLibrarySkill.sourcePath,
+        targetId: "vs-code",
+        enabled: true,
+      }),
+    );
+  });
 });
