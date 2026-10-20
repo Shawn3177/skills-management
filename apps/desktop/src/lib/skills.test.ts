@@ -1,89 +1,170 @@
 import { describe, expect, it } from "vitest";
-import { filterSkills, getSkillStats, mergeSameNamedSkills, type SkillRecord } from "./skills";
+import {
+  enabledCount,
+  filterSkills,
+  folderName,
+  groupBySeries,
+  monogram,
+  parseGithubLocation,
+  partitionSkills,
+  sourceLine,
+  tildePath,
+  tileColors,
+  type SkillRecord,
+} from "./skills";
 
-const records: SkillRecord[] = [
-  {
-    id: "codex-style",
-    name: "codex-style",
-    description: "Codex UI and workflow guardrails",
-    source: "Codex",
-    sourcePath: "C:/Users/example/.codex/skills/codex-style",
+function record(overrides: Partial<SkillRecord>): SkillRecord {
+  return {
+    id: overrides.name ?? "skill",
+    name: "skill",
+    description: "",
+    source: "Shared Library",
+    sourcePath: "C:/Users/example/.skills-manage/library/skill",
     health: "healthy",
     targets: [
-      { id: "codex", name: "Codex", enabled: true },
-      { id: "claude", name: "Claude Code", enabled: false },
+      { id: "claude-code", name: "Claude Code", enabled: false },
+      { id: "codex", name: "Codex", enabled: false },
     ],
-    supportFiles: ["SKILL.md", "references/design.md"],
-  },
-  {
-    id: "agent-pack",
-    name: "agent-pack",
-    description: "Reusable agent tool design rules",
-    source: "Shared Library",
-    sourcePath: "C:/Users/example/.skills-manage/library/agent-pack",
-    health: "warning",
-    targets: [{ id: "codex", name: "Codex", enabled: false }],
     supportFiles: ["SKILL.md"],
-  },
-];
+    ...overrides,
+  };
+}
+
+const review = record({
+  name: "代码审查",
+  sourcePath: "C:/Users/example/.skills-manage/library/代码审查",
+  sourceUrl: "https://github.com/owner/skills/tree/main/代码审查",
+  targets: [
+    { id: "claude-code", name: "Claude Code", enabled: true },
+    { id: "codex", name: "Codex", enabled: true },
+  ],
+});
+const safety = record({
+  name: "agent-tool-safety",
+  sourcePath: "C:/Users/example/.skills-manage/library/agent-tool-safety",
+  targets: [
+    { id: "claude-code", name: "Claude Code", enabled: true },
+    { id: "codex", name: "Codex", enabled: false },
+  ],
+});
+const managedCopy = record({
+  name: "agent-tool-safety",
+  source: "Claude Code",
+  sourcePath: "C:/Users/example/.claude/skills/agent-tool-safety",
+  managed: true,
+});
+const importedOriginal = record({
+  name: "代码审查",
+  source: "Codex",
+  sourcePath: "C:\\Users\\example\\.codex\\skills\\代码审查",
+});
+const localOnly = record({
+  name: "pr-description",
+  source: "Claude Code",
+  sourcePath: "C:/Users/example/.claude/skills/pr-description",
+});
+
+describe("partitionSkills", () => {
+  it("separates library skills from skills that live only in a tool folder", () => {
+    const { library, locals } = partitionSkills([localOnly, review, managedCopy, safety, importedOriginal]);
+
+    expect(library.map((skill) => skill.name)).toEqual(["agent-tool-safety", "代码审查"]);
+    expect(locals.map((skill) => skill.name)).toEqual(["pr-description"]);
+  });
+
+  it("counts library skills enabled per tool", () => {
+    expect(enabledCount([review, safety], "claude-code")).toBe(2);
+    expect(enabledCount([review, safety], "codex")).toBe(1);
+  });
+});
 
 describe("filterSkills", () => {
-  it("matches name, description, source, and path without case sensitivity", () => {
-    expect(filterSkills(records, "WORKFLOW")).toHaveLength(1);
-    expect(filterSkills(records, "shared")).toHaveLength(1);
-    expect(filterSkills(records, ".codex")).toHaveLength(1);
-  });
-
-  it("returns all records for a blank query", () => {
-    expect(filterSkills(records, "   ")).toEqual(records);
+  it("matches name, description, path and source URL case-insensitively", () => {
+    expect(filterSkills([review, safety], "SAFETY")).toEqual([safety]);
+    expect(filterSkills([review, safety], "owner/skills")).toEqual([review]);
+    expect(filterSkills([review, safety], "   ")).toEqual([review, safety]);
   });
 });
 
-describe("getSkillStats", () => {
-  it("counts healthy skills, warnings, and enabled target links", () => {
-    expect(getSkillStats(records)).toEqual({
-      total: 2,
-      healthy: 1,
-      warnings: 1,
-      enabledTargets: 1,
+describe("display helpers", () => {
+  it("describes where a library skill came from", () => {
+    const home = String.raw`C:\Users\example`;
+    expect(sourceLine(review, home)).toEqual({
+      kind: "github",
+      text: "github.com/owner/skills/tree/main/代码审查",
+      url: review.sourceUrl,
     });
-  });
-});
-
-describe("mergeSameNamedSkills", () => {
-  it("merges same-named records when they describe the same skill", () => {
-    const sharedRecord: SkillRecord = {
-      ...records[0],
-      id: "codex-style-shared",
-      source: "Shared Library",
-      sourcePath: "C:/Users/example/.skills-manage/library/codex-style",
-      targets: records[0].targets.map((target) => ({ ...target, enabled: false })),
-    };
-
-    const merged = mergeSameNamedSkills([records[0], sharedRecord]);
-
-    expect(merged).toHaveLength(1);
-    expect(merged[0].name).toBe("codex-style");
-    expect(merged[0].source).toBe("Codex, Shared Library");
-    expect(merged[0].sourcePath).toBe(sharedRecord.sourcePath);
-    expect(merged[0].targets.find((target) => target.id === "codex")?.enabled).toBe(true);
+    expect(
+      sourceLine({ ...safety, originKind: "local", originDetail: String.raw`C:\Users\example\.claude\skills\agent-tool-safety` }, home),
+    ).toEqual({ kind: "local", path: "~/.claude/skills" });
+    expect(sourceLine({ ...safety, originKind: "skillpack", originDetail: "team.skillpack" }, home)).toEqual({
+      kind: "skillpack",
+      name: "team.skillpack",
+    });
+    expect(sourceLine(safety, home)).toEqual({ kind: "library", folder: "agent-tool-safety" });
   });
 
-  it("keeps same-named records separate when descriptions show different skills", () => {
-    const unrelatedRecord: SkillRecord = {
-      ...records[0],
-      id: "codex-style-unrelated",
-      description: "A different skill that happens to share the folder name.",
-      source: "Claude Code",
-      sourcePath: "C:/Users/example/.claude/skills/codex-style",
-    };
+  it("shortens paths under the home folder", () => {
+    expect(tildePath(String.raw`C:\Users\Example\.codex\skills\x`, String.raw`C:\Users\example`)).toBe(
+      "~/.codex/skills/x",
+    );
+    expect(tildePath("D:/other/x", String.raw`C:\Users\example`)).toBe("D:/other/x");
+    expect(tildePath(String.raw`\\?\C:\Users\example\.agents\skills`, String.raw`C:\Users\example`)).toBe("~/.agents/skills");
+  });
 
-    const merged = mergeSameNamedSkills([records[0], unrelatedRecord]);
+  it("derives folder names from either path separator", () => {
+    expect(folderName("C:\\a\\b\\skill-one")).toBe("skill-one");
+    expect(folderName("/home/a/skill-two/")).toBe("skill-two");
+  });
 
-    expect(merged).toHaveLength(2);
-    expect(merged.map((record) => record.description)).toEqual([
-      records[0].description,
-      unrelatedRecord.description,
-    ]);
+  it("builds short monograms for Latin and CJK names", () => {
+    expect(monogram("agent-tool-safety")).toBe("AT");
+    expect(monogram("frontend")).toBe("FR");
+    expect(monogram("代码审查")).toBe("代");
+  });
+
+  it("keeps tile colors stable per name", () => {
+    expect(tileColors("代码审查")).toEqual(tileColors("代码审查"));
+  });
+
+  it("reads owner, repository, ref and folder from GitHub URLs", () => {
+    expect(parseGithubLocation("https://github.com/anthropics/skills/tree/main/skills/pdf")).toEqual({
+      owner: "anthropics",
+      repo: "skills",
+      ref: "main",
+      path: ["skills", "pdf"],
+    });
+    expect(parseGithubLocation("github.com/Panniantong/Agent-Reach.git")).toEqual({
+      owner: "Panniantong",
+      repo: "Agent-Reach",
+      ref: null,
+      path: [],
+    });
+    expect(parseGithubLocation("https://gitlab.com/a/b")).toBeNull();
+  });
+
+  it("groups two or more skills from one repository into a series", () => {
+    const pdf = record({ name: "pdf", detectedSourceUrl: "https://github.com/anthropics/skills/tree/main/skills/pdf", linkedSource: true });
+    const docx = record({ name: "docx", sourceUrl: "https://github.com/Anthropics/skills/tree/main/skills/docx" });
+    const reach = record({ name: "agent-reach", detectedSourceUrl: "https://github.com/Panniantong/Agent-Reach" });
+    const plain = record({ name: "plain" });
+
+    const { series, singles } = groupBySeries([pdf, reach, docx, plain]);
+
+    expect(series).toHaveLength(1);
+    expect(series[0]).toMatchObject({
+      key: "anthropics/skills",
+      repository: "anthropics/skills",
+      url: "https://github.com/anthropics/skills/tree/main/skills",
+      linked: true,
+    });
+    expect(series[0].skills.map((skill) => skill.name)).toEqual(["pdf", "docx"]);
+    expect(singles.map((skill) => skill.name)).toEqual(["agent-reach", "plain"]);
+  });
+
+  it("points a series at the repository root when its skills share no folder", () => {
+    const first = record({ name: "a", sourceUrl: "https://github.com/o/r/tree/main/a" });
+    const second = record({ name: "b", sourceUrl: "https://github.com/o/r/tree/dev/b" });
+    expect(groupBySeries([first, second]).series[0].url).toBe("https://github.com/o/r");
   });
 });
