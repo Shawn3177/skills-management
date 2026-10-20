@@ -49,6 +49,14 @@ cargo test
 cargo check
 ```
 
+On Windows, `build.rs` embeds `src-tauri/windows-app-manifest.xml` (Common Controls v6) into every target, including the `cargo test` executables. Without it the test binaries exit at startup with `STATUS_ENTRYPOINT_NOT_FOUND`.
+
+## Runtime Notes
+
+- GitHub import and update checks use the unauthenticated API (60 requests/hour). Set `SKILLS_MANAGE_GITHUB_TOKEN` (or `GITHUB_TOKEN` / `GH_TOKEN`) to raise the limit; the token is only sent to `api.github.com`.
+- `SKILLS_MANAGE_DATA_ROOT` overrides the data root (default `%USERPROFILE%\.skills-manage`).
+- Disabled target copies and replaced library versions move to `<data root>\trash`. Settings shows the trash size and can permanently clear items older than 30 days after an explicit confirmation.
+
 ## Local Reference Files
 
 The files below are local references only and are intentionally ignored:
