@@ -1,4 +1,4 @@
-use crate::fs_ops::{copy_skill_dir, default_data_root, safe_folder_name};
+use crate::fs_ops::{copy_skill_dir, default_data_root, display_path, safe_folder_name, SOURCE_MARKER_FILE};
 use serde::Serialize;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -59,13 +59,18 @@ pub fn import_skill_to_library_with_root(
             imported: false,
             already_managed: true,
             skill_name,
-            library_path: source_canonical.display().to_string(),
+            library_path: display_path(&source_canonical),
             message: "Skill is already in the shared library.".to_string(),
         });
     }
 
     let destination = unique_destination(&library_root, &skill_name);
     copy_skill_dir(source_path, &destination)?;
+    // Remember where it came from; GitHub and .skillpack imports overwrite this.
+    write_origin_marker(
+        &destination,
+        &serde_json::json!({ "kind": "local", "path": display_path(&source_canonical) }),
+    )?;
 
     Ok(ImportResult {
         imported: true,
@@ -74,6 +79,15 @@ pub fn import_skill_to_library_with_root(
         library_path: destination.display().to_string(),
         message: "Skill imported into the shared library.".to_string(),
     })
+}
+
+/// Record a library skill's origin in its source marker (never copied to tools
+/// or into a .skillpack).
+pub(crate) fn write_origin_marker(skill_dir: &Path, origin: &serde_json::Value) -> Result<(), String> {
+    let json = serde_json::to_string_pretty(origin)
+        .map_err(|error| format!("Could not serialize origin: {error}"))?;
+    fs::write(skill_dir.join(SOURCE_MARKER_FILE), json)
+        .map_err(|error| format!("Could not record where the skill came from: {error}"))
 }
 
 pub(crate) fn unique_destination(library_root: &Path, skill_name: &str) -> PathBuf {
@@ -96,9 +110,8 @@ pub(crate) fn unique_destination(library_root: &Path, skill_name: &str) -> PathB
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::fs_ops::test_temp_dir as unique_temp_dir;
     use std::fs;
-    use std::path::PathBuf;
-    use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
     fn imports_skill_directory_into_shared_library() {
@@ -180,7 +193,9 @@ mod tests {
         let imported = data_root.join("library").join("source-markers");
 
         assert!(imported.join("SKILL.md").is_file());
-        assert!(!imported.join(".skills-manage-source.json").exists());
+        // The source's own marker is not copied; a fresh origin record is written.
+        let origin = fs::read_to_string(imported.join(".skills-manage-source.json")).unwrap();
+        assert!(origin.contains("\"kind\": \"local\""), "{origin}");
         assert!(!imported.join(".skills-manage-link.json").exists());
 
         fs::remove_dir_all(source_root).unwrap();
@@ -230,11 +245,21 @@ mod tests {
         fs::remove_dir_all(source_root).unwrap();
     }
 
-    fn unique_temp_dir(prefix: &str) -> PathBuf {
-        let stamp = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        std::env::temp_dir().join(format!("skills-manage-{prefix}-{stamp}"))
+    #[test]
+    fn keeps_non_ascii_folder_names() {
+        let source_root = unique_temp_dir("source-unicode-root");
+        let source = source_root.join("代码审查");
+        let data_root = unique_temp_dir("data-root-unicode");
+        fs::create_dir_all(&source).unwrap();
+        fs::write(source.join("SKILL.md"), "# Skill
+").unwrap();
+
+        let result = import_skill_to_library_with_root(&source, &data_root).unwrap();
+
+        assert!(result.library_path.ends_with("代码审查"));
+        assert!(data_root.join("library").join("代码审查").join("SKILL.md").is_file());
+
+        fs::remove_dir_all(source_root).unwrap();
+        fs::remove_dir_all(data_root).unwrap();
     }
 }
