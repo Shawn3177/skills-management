@@ -33,8 +33,19 @@ export interface SkillRecord {
   issues?: string[];
   /** Library skills: the tools it may not suit (tools it suits are left out). */
   compat?: CompatSummary[];
-  /** Library skills: tools that get their own version from the repository. */
-  variants?: Array<{ targetId: string; path: string }>;
+  /** Library skills: tools that have their own version in the repository. */
+  variants?: SkillVariant[];
+}
+
+/** Which version a tool gets: its own from the repository, or the main one. */
+export type VariantChoice = "variant" | "default";
+
+export interface SkillVariant {
+  targetId: string;
+  /** Its folder in the repository, e.g. `.agents/skills/dev`. */
+  path: string;
+  /** Missing in older scans: the tool's own version. */
+  choice?: VariantChoice;
 }
 
 export type CompatLevel = "compatible" | "degraded" | "incompatible";

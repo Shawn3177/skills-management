@@ -806,6 +806,7 @@ function App() {
               onEdit={(skill) => go({ name: "edit", path: skill.sourcePath })}
               onAddToLibrary={(skill) => void addLocalToLibrary(skill)}
               onCompatChanged={() => void loadSkills()}
+              onVariantsChanged={() => void loadSkills()}
             />
           ) : (
             <div className="page-body">

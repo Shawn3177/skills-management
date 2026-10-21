@@ -10,11 +10,14 @@
 //! SKILL.md files that only point at another file in the repository (useless
 //! once copied on their own), and folders outside a tool's skills folder
 //! (`examples/`, `template/` …), which belong to no tool.
+//!
+//! The user can still pick the library skill for a tool that has its own
+//! version; that choice is kept in `<data root>/variant-prefs.json`.
 
 use crate::fs_ops::{unique_timestamped_path, SOURCE_MARKER_FILE};
 use crate::github::extract_subdir_from_zip;
 use crate::trash::unique_trash_path;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fs;
 use std::io::{Cursor, Read};
@@ -22,6 +25,7 @@ use std::path::{Path, PathBuf};
 use zip::ZipArchive;
 
 pub const VARIANTS_DIR: &str = "variants";
+const PREFS_FILE: &str = "variant-prefs.json";
 const STAGING_PREFIX: &str = ".staging";
 const MAX_ENTRIES: usize = 10_000;
 /// Only candidate folders are read; this caps what they may add up to.
@@ -42,6 +46,15 @@ const TOOL_PREFIXES: [(&str, &str, u8); 9] = [
     (".codebuddy/skills/", "codebuddy", 0),
 ];
 
+/// Which version a tool with its own version gets: that one (the default)
+/// or the library skill.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum VariantChoice {
+    Variant,
+    Default,
+}
+
 /// A tool that has its own version of a library skill.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -49,6 +62,17 @@ pub struct VariantInfo {
     pub target_id: String,
     /// The folder in the repository it came from, e.g. `.agents/skills/dev`.
     pub path: String,
+    pub choice: VariantChoice,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VariantChoiceResult {
+    pub target_id: String,
+    pub choice: VariantChoice,
+    /// The skill was enabled in that tool, so its copy was replaced.
+    pub refreshed: bool,
+    pub message: String,
 }
 
 /// What an update found: the tools' versions now in the repository (tool id ->
@@ -208,19 +232,26 @@ pub fn trash_variants(data_root: &Path, library_folder: &str) -> Result<(), Stri
     fs::rename(&current, trash).map_err(|error| format!("Could not move the old tool versions to trash: {error}"))
 }
 
-/// A library skill's version folder for one tool, when it has one. The data
-/// root is the library's parent, so tests with their own roots stay isolated.
+/// A library skill's version folder for one tool, when it has one (whether
+/// the tool uses it or not). The data root is the library's parent, so tests
+/// with their own roots stay isolated.
 pub fn variant_for(library_skill_dir: &Path, target_id: &str) -> Option<PathBuf> {
     let folder = library_skill_dir.file_name()?;
-    let data_root = library_skill_dir.parent()?.parent()?;
+    let data_root = data_root_of(library_skill_dir)?;
     let dir = data_root.join(VARIANTS_DIR).join(folder).join(target_id);
     dir.join("SKILL.md").is_file().then_some(dir)
+}
+
+/// The tool's own version, unless the user picked the library skill there.
+pub fn chosen_variant(library_skill_dir: &Path, target_id: &str) -> Option<PathBuf> {
+    let dir = variant_for(library_skill_dir, target_id)?;
+    (choice_for(library_skill_dir, target_id) == VariantChoice::Variant).then_some(dir)
 }
 
 /// What a tool gets when the skill is enabled there: its own version, or the
 /// library skill itself.
 pub fn effective_source(library_skill_dir: &Path, target_id: &str) -> PathBuf {
-    variant_for(library_skill_dir, target_id).unwrap_or_else(|| library_skill_dir.to_path_buf())
+    chosen_variant(library_skill_dir, target_id).unwrap_or_else(|| library_skill_dir.to_path_buf())
 }
 
 /// Every version folder of a library skill (to keep edits in step).
@@ -232,23 +263,141 @@ pub fn variant_dirs(library_skill_dir: &Path) -> Vec<PathBuf> {
 }
 
 /// The tools with their own version of a library skill, with the repository
-/// folder each came from (from the skill's source file).
+/// folder each came from (from the skill's source file) and which version
+/// each tool gets.
 pub fn list(library_skill_dir: &Path) -> Vec<VariantInfo> {
-    let labels = recorded_variants(library_skill_dir);
-    crate::targets::toggleable_target_ids()
+    let ids: Vec<&str> = crate::targets::toggleable_target_ids()
         .iter()
+        .copied()
         .filter(|id| variant_for(library_skill_dir, id).is_some())
+        .collect();
+    if ids.is_empty() {
+        return Vec::new();
+    }
+    let labels = recorded_variants(library_skill_dir);
+    let prefs = data_root_of(library_skill_dir).map(load_prefs).unwrap_or_default();
+    let folder = folder_name(library_skill_dir);
+    ids.into_iter()
         .map(|id| VariantInfo {
             target_id: id.to_string(),
-            path: labels.get(*id).cloned().unwrap_or_default(),
+            path: labels.get(id).cloned().unwrap_or_default(),
+            choice: choice_in(&prefs, &folder, id),
         })
         .collect()
 }
 
-/// The repository folder a tool's version came from, when it has one.
+/// The repository folder of the version a tool gets, when it gets its own.
 pub fn variant_label(library_skill_dir: &Path, target_id: &str) -> Option<String> {
-    variant_for(library_skill_dir, target_id)?;
+    chosen_variant(library_skill_dir, target_id)?;
     recorded_variants(library_skill_dir).remove(target_id)
+}
+
+fn data_root_of(library_skill_dir: &Path) -> Option<&Path> {
+    library_skill_dir.parent()?.parent()
+}
+
+fn folder_name(library_skill_dir: &Path) -> String {
+    library_skill_dir
+        .file_name()
+        .map(|name| name.to_string_lossy().to_string())
+        .unwrap_or_default()
+}
+
+/// library folder -> tool id -> choice. Only tools the user switched appear.
+type Prefs = BTreeMap<String, BTreeMap<String, VariantChoice>>;
+
+fn load_prefs(data_root: &Path) -> Prefs {
+    fs::read_to_string(data_root.join(PREFS_FILE))
+        .ok()
+        .and_then(|text| serde_json::from_str(&text).ok())
+        .unwrap_or_default()
+}
+
+fn save_prefs(data_root: &Path, prefs: &Prefs) -> Result<(), String> {
+    fs::create_dir_all(data_root).map_err(|error| format!("Could not create the data folder: {error}"))?;
+    let text = serde_json::to_string_pretty(prefs).map_err(|error| error.to_string())?;
+    // Write beside the file, then swap, so a crash never leaves half a file.
+    let staging = data_root.join(format!("{PREFS_FILE}.tmp"));
+    fs::write(&staging, text).map_err(|error| format!("Could not save the version choice: {error}"))?;
+    fs::rename(&staging, data_root.join(PREFS_FILE))
+        .map_err(|error| format!("Could not save the version choice: {error}"))
+}
+
+fn choice_in(prefs: &Prefs, folder: &str, target_id: &str) -> VariantChoice {
+    prefs
+        .get(folder)
+        .and_then(|tools| tools.get(target_id))
+        .copied()
+        .unwrap_or(VariantChoice::Variant)
+}
+
+fn choice_for(library_skill_dir: &Path, target_id: &str) -> VariantChoice {
+    data_root_of(library_skill_dir)
+        .map(|data_root| choice_in(&load_prefs(data_root), &folder_name(library_skill_dir), target_id))
+        .unwrap_or(VariantChoice::Variant)
+}
+
+fn save_choice(data_root: &Path, folder: &str, target_id: &str, choice: VariantChoice) -> Result<(), String> {
+    let mut prefs = load_prefs(data_root);
+    prefs.entry(folder.to_string()).or_default().insert(target_id.to_string(), choice);
+    save_prefs(data_root, &prefs)
+}
+
+/// Drop a skill's choices when it leaves the library, so a later skill with
+/// the same folder name starts fresh.
+pub fn forget_choices(data_root: &Path, library_folder: &str) -> Result<(), String> {
+    let mut prefs = load_prefs(data_root);
+    if prefs.remove(library_folder).is_none() {
+        return Ok(());
+    }
+    save_prefs(data_root, &prefs)
+}
+
+pub fn set_variant_choice(
+    library_path: String,
+    target_id: String,
+    choice: VariantChoice,
+) -> Result<VariantChoiceResult, String> {
+    let data_root = crate::fs_ops::default_data_root()?;
+    let target_root = crate::targets::target_root_for(&target_id)?;
+    set_variant_choice_with_roots(Path::new(&library_path), &target_id, choice, &data_root, &target_root)
+}
+
+/// Pick which version a tool gets, and re-copy the skill there when it is
+/// enabled. If that copy cannot be replaced, the old choice is put back.
+pub fn set_variant_choice_with_roots(
+    library_path: &Path,
+    target_id: &str,
+    choice: VariantChoice,
+    data_root: &Path,
+    target_root: &Path,
+) -> Result<VariantChoiceResult, String> {
+    let skill_dir = crate::targets::validate_library_skill(library_path, data_root)?;
+    let target_name =
+        crate::targets::target_name_for(target_id).ok_or_else(|| format!("Unknown tool: {target_id}"))?;
+    if variant_for(&skill_dir, target_id).is_none() {
+        return Err(format!("The repository has no {target_name} version of this skill."));
+    }
+    let folder = folder_name(&skill_dir);
+    let previous = choice_in(&load_prefs(data_root), &folder, target_id);
+    save_choice(data_root, &folder, target_id, choice)?;
+
+    let roots = [(target_id, target_root.to_path_buf())];
+    let (refreshed, failed) = crate::targets::refresh_managed_copies(&skill_dir, data_root, &roots);
+    if !failed.is_empty() {
+        let _ = save_choice(data_root, &folder, target_id, previous);
+        return Err(format!("Could not replace the copy in {target_name}, so the version was not changed."));
+    }
+    let which = match choice {
+        VariantChoice::Variant => format!("the repository's {target_name} version"),
+        VariantChoice::Default => "the main version".to_string(),
+    };
+    Ok(VariantChoiceResult {
+        target_id: target_id.to_string(),
+        choice,
+        refreshed: !refreshed.is_empty(),
+        message: format!("{target_name} now uses {which}."),
+    })
 }
 
 fn recorded_variants(library_skill_dir: &Path) -> BTreeMap<String, String> {
@@ -342,10 +491,50 @@ pub(crate) mod tests {
         assert_eq!(effective_source(&library_skill, "codex"), library_skill);
         assert_eq!(
             list(&library_skill),
-            vec![VariantInfo { target_id: "claude-code".to_string(), path: ".claude/skills/dev".to_string() }]
+            vec![VariantInfo {
+                target_id: "claude-code".to_string(),
+                path: ".claude/skills/dev".to_string(),
+                choice: VariantChoice::Variant,
+            }]
         );
         assert_eq!(variant_label(&library_skill, "claude-code").as_deref(), Some(".claude/skills/dev"));
         assert_eq!(variant_label(&library_skill, "codex"), None);
+
+        // Picking the main version for Claude Code, then the repository's again.
+        let claude_root = data_root.join("claude-root");
+        crate::targets::set_skill_target_enabled_with_root(&library_skill, "claude-code", true, &data_root, &claude_root)
+            .unwrap();
+        let claude_copy = claude_root.join("dev").join("SKILL.md");
+        assert_eq!(fs::read_to_string(&claude_copy).unwrap(), "claude version");
+
+        let chose_main =
+            set_variant_choice_with_roots(&library_skill, "claude-code", VariantChoice::Default, &data_root, &claude_root)
+                .unwrap();
+        assert!(chose_main.refreshed);
+        assert_eq!(fs::read_to_string(&claude_copy).unwrap(), FULL);
+        assert_eq!(effective_source(&library_skill, "claude-code"), library_skill);
+        assert_eq!(variant_label(&library_skill, "claude-code"), None);
+        assert_eq!(list(&library_skill)[0].choice, VariantChoice::Default);
+        assert!(crate::targets::is_managed_target_copy(&claude_root.join("dev"), &library_skill, "claude-code"));
+        let prefs = fs::read_to_string(data_root.join(PREFS_FILE)).unwrap();
+        assert_eq!(serde_json::from_str::<serde_json::Value>(&prefs).unwrap()["dev"]["claude-code"], "default");
+
+        set_variant_choice_with_roots(&library_skill, "claude-code", VariantChoice::Variant, &data_root, &claude_root)
+            .unwrap();
+        assert_eq!(fs::read_to_string(&claude_copy).unwrap(), "claude version");
+        assert_eq!(list(&library_skill)[0].choice, VariantChoice::Variant);
+
+        // A tool with no version of its own has nothing to choose, and an
+        // unenabled tool just remembers the choice.
+        let codex_root = data_root.join("codex-root");
+        assert!(set_variant_choice_with_roots(&library_skill, "codex", VariantChoice::Default, &data_root, &codex_root)
+            .is_err());
+        let unrefreshed =
+            set_variant_choice_with_roots(&library_skill, "claude-code", VariantChoice::Default, &data_root, &codex_root)
+                .unwrap();
+        assert!(!unrefreshed.refreshed);
+        forget_choices(&data_root, "dev").unwrap();
+        assert_eq!(list(&library_skill)[0].choice, VariantChoice::Variant);
 
         // The repository dropped its Claude version: back to the library skill.
         put_in_place(&data_root, "dev", None).unwrap();

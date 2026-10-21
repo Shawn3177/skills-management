@@ -742,6 +742,7 @@ pub fn remove_skill_from_library_with_roots(
         .map_err(|error| format!("Could not move the skill to trash: {error}"))?;
     // Best effort: the skill itself is already gone from the library.
     let _ = crate::variants::trash_variants(data_root, &library_folder);
+    let _ = crate::variants::forget_choices(data_root, &library_folder);
 
     Ok(RemoveResult {
         message: format!("Moved {skill_name} to trash."),
