@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { CompatFinding, CompatLevel, SkillRecord, ToolId } from "./skills";
+import type { CompatFinding, CompatLevel, SkillRecord, SkillVariant, ToolId, VariantChoice } from "./skills";
 
 export type AppStatus = {
   appName: string;
@@ -40,6 +40,16 @@ export type CompatReport = {
   declared: string | null;
   findings: CompatFinding[];
   acknowledged: boolean;
+};
+
+export type VariantChoiceResult = { targetId: string; choice: VariantChoice; refreshed: boolean; message: string };
+
+export type DetectVariantsResult = {
+  skillName: string;
+  variants: SkillVariant[];
+  refreshedTargets: string[];
+  failedTargets: string[];
+  message: string;
 };
 
 export type RemoveResult = { skillName: string; removedFrom: string[]; message: string };
@@ -162,6 +172,9 @@ export const api = {
   findSources: () => invoke<FindSourcesResult>("find_skill_sources"),
   unlinkSeries: (repository: string) => invoke<number>("unlink_github_series", { repository }),
   checkUpdates: () => invoke<SkillUpdateStatus[]>("check_skill_updates"),
+  setVariantChoice: (libraryPath: string, targetId: ToolId, choice: VariantChoice) =>
+    invoke<VariantChoiceResult>("set_skill_variant_choice", { libraryPath, targetId, choice }),
+  detectVariants: (libraryPath: string) => invoke<DetectVariantsResult>("detect_skill_variants", { libraryPath }),
   updateSkill: (libraryPath: string) => invoke<{ skillName: string }>("update_skill_from_github", { libraryPath }),
   exportSkillpack: (sources: Array<{ sourcePath: string; name: string; targets: Array<{ id: string; enabled: boolean }> }>, destination: string) =>
     invoke<{ skillCount: number }>("export_skillpack", { sources, destination }),

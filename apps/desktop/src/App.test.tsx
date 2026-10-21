@@ -649,6 +649,85 @@ describe("App", () => {
     expect(screen.getByText("Codex: .agents/skills/dev")).toBeInTheDocument();
   });
 
+  it("switches a tool between the repository's version and the main version on the details page", async () => {
+    const dev = { ...safety, variants: [{ targetId: "codex", path: ".agents/skills/dev", choice: "variant" }] };
+    let scans = 0;
+    mockBackend({
+      scan_skills: () => {
+        scans += 1;
+        return scans === 1
+          ? [review, dev, broken]
+          : [review, { ...dev, variants: [{ ...dev.variants[0], choice: "default" }] }, broken];
+      },
+      read_skill_markdown: () => "Body",
+      set_skill_variant_choice: () => ({ targetId: "codex", choice: "default", refreshed: true, message: "" }),
+    });
+    await renderApp();
+
+    fireEvent.click(screen.getByRole("button", { name: "agent-tool-safety" }));
+    const group = await screen.findByRole("group", { name: "Version for Codex" });
+    const own = within(group).getByRole("button", { name: "Repository's Codex version" });
+    const main = within(group).getByRole("button", { name: "Main version" });
+    expect(own).toHaveAttribute("aria-pressed", "true");
+    expect(main).toHaveAttribute("aria-pressed", "false");
+
+    // The version already in use does nothing.
+    fireEvent.click(own);
+    expect(calls("set_skill_variant_choice")).toHaveLength(0);
+
+    fireEvent.click(main);
+    await waitFor(() =>
+      expect(calls("set_skill_variant_choice")).toEqual([
+        { libraryPath: safety.sourcePath, targetId: "codex", choice: "default" },
+      ]),
+    );
+    expect(await screen.findByText("Codex now uses the main version. Synced to Codex.")).toBeInTheDocument();
+    await waitFor(() =>
+      expect(within(screen.getByRole("group", { name: "Version for Codex" })).getByRole("button", { name: "Main version" })).toHaveAttribute(
+        "aria-pressed",
+        "true",
+      ),
+    );
+  });
+
+  it("detects tool versions for a skill added from GitHub before they were kept", async () => {
+    const fromGithub = { ...safety, originKind: "github", sourceUrl: "https://github.com/o/r/tree/main/skills/dev" };
+    let scans = 0;
+    mockBackend({
+      scan_skills: () => {
+        scans += 1;
+        return scans === 1
+          ? [review, fromGithub, broken]
+          : [review, { ...fromGithub, variants: [{ targetId: "codex", path: ".codex/skills/dev", choice: "variant" }] }, broken];
+      },
+      read_skill_markdown: () => "Body",
+      detect_skill_variants: () => ({
+        skillName: "agent-tool-safety",
+        variants: [{ targetId: "codex", path: ".codex/skills/dev", choice: "variant" }],
+        refreshedTargets: ["Codex"],
+        failedTargets: [],
+        message: "",
+      }),
+    });
+    await renderApp();
+
+    fireEvent.click(screen.getByRole("button", { name: "agent-tool-safety" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Detect tool versions" }));
+    await waitFor(() => expect(calls("detect_skill_variants")).toEqual([{ libraryPath: safety.sourcePath }]));
+    expect(await screen.findByText("Found tool versions for: Codex. Updated the copy in: Codex.")).toBeInTheDocument();
+    expect(await screen.findByText("Codex: .codex/skills/dev")).toBeInTheDocument();
+  });
+
+  it("offers no version controls for a library skill without versions or a GitHub source", async () => {
+    mockBackend({ read_skill_markdown: () => "Body" }, [review, safety, broken]);
+    await renderApp();
+
+    fireEvent.click(screen.getByRole("button", { name: "agent-tool-safety" }));
+    expect(await screen.findByText("Location")).toBeInTheDocument();
+    expect(screen.queryByText("Tool versions")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Detect tool versions" })).not.toBeInTheDocument();
+  });
+
   it("does not ask again in a tool the user marked as working", async () => {
     mockBackend(
       { set_skill_target_enabled: () => ({ enabled: true, changed: true }) },

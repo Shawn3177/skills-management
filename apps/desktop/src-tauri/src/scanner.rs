@@ -566,6 +566,14 @@ mod tests {
         assert!(codex.enabled && !codex.conflict);
         assert_eq!(skills[0].variants.len(), 1);
         assert_eq!(skills[0].variants[0].target_id, "codex");
+        assert_eq!(skills[0].variants[0].choice, crate::variants::VariantChoice::Variant);
+
+        // Codex was switched to the main version: that copy no longer matches.
+        fs::write(data_root.join("variant-prefs.json"), r#"{"dev":{"codex":"default"}}"#).unwrap();
+        let skills = scan_skill_roots_with_target_roots(&[library_root.clone()], &[("codex", codex_root.clone())]);
+        let codex = skills[0].targets.iter().find(|target| target.id == "codex").unwrap();
+        assert!(!codex.enabled && codex.conflict);
+        assert_eq!(skills[0].variants[0].choice, crate::variants::VariantChoice::Default);
 
         fs::remove_dir_all(temp_root).unwrap();
     }

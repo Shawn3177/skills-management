@@ -1546,8 +1546,19 @@ a:hover {
 
 .detail-variants {
   display: grid;
-  gap: 2px;
-  font-family: var(--mono);
+  gap: 6px;
+  justify-items: start;
+}
+
+.variant-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 12px;
+}
+
+.detail-variants .field-hint {
+  margin: 0;
 }
 
 .detail-files {
