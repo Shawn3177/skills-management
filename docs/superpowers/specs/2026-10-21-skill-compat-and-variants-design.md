@@ -176,6 +176,14 @@ blob id 和当前 SKILL.md 一致，就视为已确认。从 GitHub 更新后内
 - **被 `export-ignore` 的目录看不到。** GitHub 生成 zip 时会跳过 `.gitattributes` 里标了 `export-ignore` 的目录，比如 `Automattic/wordpress-activitypub` 就把 `/.agents/`、`/.claude/` 标掉了。这种仓库里的专属版本识别不到，而且从这些目录导入本身就会失败，报"路径不存在"，这是 PR 2 之前就有的问题。要解决得改成用 git trees + blobs API 下载，单独处理。
 - **用户导入的就是指针时不会自动纠正。** 比如直接导入 Automattic 的 `.claude/skills/dev` 那个指针，PR 2 不会自动换成它指向的那份。不过适配检查会把它标成"所有工具都不适配"。
 
+### PR 3 实际实现（2026-10-21）
+
+- **手动切换。** 选择存在 `variant-prefs.json`，值是 `"variant"` 或 `"default"`，没写就是 `"variant"`。`variants::chosen_variant` 先看磁盘上有没有专属版本，再看选择，所以启用、扫描状态、适配提醒（`library_skill_summaries`）、启用提示里的版本路径都跟着选择走。编辑名称描述时专属版本照样一起改，切回来不会是旧名字。
+- **切换命令** `set_skill_variant_choice` 走写锁。这个工具已启用时，用 `refresh_managed_copies` 只重铺这一个工具的副本；重铺失败就把选择改回去并报错。没有专属版本的工具不能切。
+- **扫描结果**里 `variants` 每项多了 `choice`，详情页"专属版本"一行每个工具一个"仓库的 Codex 版 / 主版本"切换。
+- **"检测其他版本"按钮**只给从 GitHub 导入（有 source 文件）的库内 skill 显示。命令 `detect_skill_variants` 下载 `syncedCommit` 那次提交的 zip（保证和库里那份对得上），识别后换上专属版本、写进 source 文件的 `variants`，只重铺"专属版本有变化"的已启用工具。
+- **从共享库移除时**，这个 skill 的选择一起删掉，以后同名的新 skill 不会继承。
+
 ## 分批交付
 
 | PR | 内容 | 依赖 |
