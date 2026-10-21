@@ -12,28 +12,26 @@
 //!   validated owner/repo/ref — the raw user URL is never passed to the client.
 //! - Every archive entry is checked with `is_safe_relative` before writing, and
 //!   the download + extraction are bounded (size and entry-count caps).
+//! - Paths the zipball leaves out (`export-ignore` in `.gitattributes`) are
+//!   read through the trees and blobs APIs on `api.github.com` instead, under
+//!   the same checks (see `snapshot`).
 
-use crate::fs_ops::{
-    default_data_root, is_safe_relative, safe_folder_name, unique_timestamped_path, unix_ms,
-    SOURCE_MARKER_FILE,
-};
+use crate::fs_ops::{default_data_root, safe_folder_name, unique_timestamped_path, unix_ms, SOURCE_MARKER_FILE};
 use crate::library::import_skill_to_library_with_root;
 use crate::series;
+use crate::snapshot::{self, RepoSnapshot, TreeFile, TreeSnapshot, ZipSnapshot};
 use crate::targets;
 use crate::trash::unique_trash_path;
 use crate::variants;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fs;
-use std::io::{Cursor, Read};
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
-use zip::ZipArchive;
 
 const USER_AGENT: &str = concat!("skills-manage/", env!("CARGO_PKG_VERSION"));
-const MAX_ENTRIES: usize = 10_000;
-const MAX_TOTAL_BYTES: u64 = 100 * 1024 * 1024; // 100 MB uncompressed
 const MAX_DOWNLOAD_BYTES: u64 = 100 * 1024 * 1024; // 100 MB compressed
 
 /// A parsed `github.com` URL pointing at a repo, a `/tree/<ref>/<subdir>`, or
@@ -241,13 +239,14 @@ pub fn import_from_github_with_root(
     // the content even if the branch moves between the two requests.
     let zip_bytes = download_zipball(&agent, &parsed.owner, &parsed.repo, &synced_commit)
         .map_err(|error| error.message())?;
-    install_from_zip(&zip_bytes, &parsed, &git_ref, &subdir, &synced_commit, data_root)
+    let mut snapshot = open_snapshot(&agent, &parsed.owner, &parsed.repo, &synced_commit, &zip_bytes, &subdir)?;
+    install_from_snapshot(snapshot.as_mut(), &parsed, &git_ref, &subdir, &synced_commit, data_root)
 }
 
-/// Place the skill at `subdir` of a downloaded archive in the library and
-/// record where it came from.
-fn install_from_zip(
-    zip_bytes: &[u8],
+/// Place the skill at `subdir` of a repository in the library and record
+/// where it came from.
+fn install_from_snapshot(
+    snapshot: &mut dyn RepoSnapshot,
     parsed: &GithubRef,
     git_ref: &str,
     subdir: &str,
@@ -266,7 +265,7 @@ fn install_from_zip(
     let skill_staging = staging_parent.join(safe_folder_name(&skill_name, "github-skill"));
 
     let prepared = (|| {
-        extract_subdir_from_zip(zip_bytes, subdir, &skill_staging)?;
+        snapshot::extract_subdir(snapshot, subdir, &skill_staging)?;
         if !skill_staging.join("SKILL.md").is_file() {
             return Err(if subdir.is_empty() {
                 "The repository root has no SKILL.md. Use a /tree/<branch>/<subdir> URL that points at the skill folder.".to_string()
@@ -297,7 +296,7 @@ fn install_from_zip(
         synced_commit: synced_commit.to_string(),
         synced_at: unix_ms(),
         url: url.clone(),
-        variants: install_variants(zip_bytes, subdir, &library_path, data_root),
+        variants: install_variants(snapshot, subdir, &library_path, data_root),
     };
     write_source_file(&library_path, &source)?;
 
@@ -316,12 +315,17 @@ fn install_from_zip(
 
 /// Other tools' versions of a newly imported skill, kept beside it. Best
 /// effort: the import itself never fails over them.
-fn install_variants(zip_bytes: &[u8], subdir: &str, library_path: &Path, data_root: &Path) -> BTreeMap<String, String> {
-    let Ok(found) = variants::detect_in_zip(zip_bytes, subdir) else {
+fn install_variants(
+    snapshot: &mut dyn RepoSnapshot,
+    subdir: &str,
+    library_path: &Path,
+    data_root: &Path,
+) -> BTreeMap<String, String> {
+    let Ok(found) = variants::detect(snapshot, subdir) else {
         return BTreeMap::new();
     };
     let folder = dir_skill_name(library_path);
-    let placed = variants::stage(zip_bytes, &found, data_root)
+    let placed = variants::stage(snapshot, &found, data_root)
         .and_then(|staged| variants::put_in_place(data_root, &folder, staged.as_deref()));
     if placed.is_err() {
         return BTreeMap::new();
@@ -329,12 +333,86 @@ fn install_variants(zip_bytes: &[u8], subdir: &str, library_path: &Path, data_ro
     found.into_iter().collect()
 }
 
-/// The tools' versions in a freshly downloaded archive, staged for an update.
+/// The tools' versions in a freshly fetched repository, staged for an update.
 /// `None` (keep the current ones) when they could not be read.
-fn stage_variant_update(zip_bytes: &[u8], subdir: &str, data_root: &Path) -> Option<variants::VariantUpdate> {
-    let found = variants::detect_in_zip(zip_bytes, subdir).ok()?;
-    let staged = variants::stage(zip_bytes, &found, data_root).ok()?;
+fn stage_variant_update(
+    snapshot: &mut dyn RepoSnapshot,
+    subdir: &str,
+    data_root: &Path,
+) -> Option<variants::VariantUpdate> {
+    let found = variants::detect(snapshot, subdir).ok()?;
+    let staged = variants::stage(snapshot, &found, data_root).ok()?;
     Some(variants::VariantUpdate { found: found.into_iter().collect(), staged })
+}
+
+/// The repository at `commit` with everything at `subdir` readable, plus the
+/// folders where other tools keep their own versions of it.
+///
+/// GitHub builds the zipball with `git archive`, which leaves out paths marked
+/// `export-ignore` in `.gitattributes` (commonly `.agents/`, `.claude/` …).
+/// When the archive lacks `subdir`, or its `.gitattributes` hides a tool's
+/// skills folder, the file list comes from the trees API instead and the files
+/// the archive left out are read as blobs. Only the ones actually needed are
+/// fetched; the rest still come from the archive.
+fn open_snapshot<'a>(
+    agent: &'a ureq::Agent,
+    owner: &str,
+    repo: &str,
+    commit: &str,
+    zip_bytes: &'a [u8],
+    subdir: &str,
+) -> Result<Box<dyn RepoSnapshot + 'a>, String> {
+    let mut zip = ZipSnapshot::new(zip_bytes)?;
+    let in_archive = snapshot::has_dir(&zip, subdir);
+    if in_archive && !hides_tool_folders(&mut zip, subdir) {
+        return Ok(Box::new(zip));
+    }
+    match tree_snapshot(agent, owner, repo, commit, zip_bytes) {
+        Ok(tree) if !in_archive && tree.truncated && !snapshot::has_dir(&tree, subdir) => Err(format!(
+            "'{subdir}' is not in GitHub's download archive (usually because the repository marks it export-ignore in .gitattributes), and the repository is too large to list its files instead."
+        )),
+        Ok(tree) => Ok(Box::new(tree)),
+        // The skill itself is there; other tools' versions are best effort.
+        Err(_) if in_archive => Ok(Box::new(zip)),
+        Err(error) => Err(format!(
+            "'{subdir}' is not in GitHub's download archive (usually because the repository marks it export-ignore in .gitattributes), and listing the repository's files through the GitHub API failed: {}",
+            error.message()
+        )),
+    }
+}
+
+/// True when the archive's `.gitattributes` leaves out a folder where some
+/// tool would keep its own version of the skill at `subdir`. An archive that
+/// leaves out `.gitattributes` itself can't tell; then only a missing `subdir`
+/// sends us to the trees API.
+fn hides_tool_folders(zip: &mut ZipSnapshot, subdir: &str) -> bool {
+    let Ok(attributes) = zip.read(".gitattributes") else {
+        return false;
+    };
+    let attributes = String::from_utf8_lossy(&attributes);
+    variants::tool_folders(subdir).iter().any(|dir| snapshot::export_ignored(&attributes, dir))
+}
+
+/// Every file at `commit` from the trees API; the archive (same commit)
+/// supplies the files it has, blobs the rest.
+fn tree_snapshot<'a>(
+    agent: &'a ureq::Agent,
+    owner: &str,
+    repo: &str,
+    commit: &str,
+    zip_bytes: &'a [u8],
+) -> Result<TreeSnapshot<'a>, GithubError> {
+    let (files, truncated) = repo_tree_files(agent, owner, repo, commit)?;
+    let (owner, repo) = (owner.to_string(), repo.to_string());
+    let fetch = Box::new(move |sha: &str| fetch_blob(agent, &owner, &repo, sha).map_err(|error| error.message()));
+    Ok(TreeSnapshot::new(files, truncated, ZipSnapshot::new(zip_bytes).ok(), fetch))
+}
+
+/// One file's contents by blob id.
+fn fetch_blob(agent: &ureq::Agent, owner: &str, repo: &str, sha: &str) -> Result<Vec<u8>, GithubError> {
+    let url = format!("https://api.github.com/repos/{owner}/{repo}/git/blobs/{sha}");
+    let json = api_get_json(agent, &url)?;
+    snapshot::decode_blob(&json).map_err(GithubError::Other)
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -356,7 +434,7 @@ pub struct BatchImportResult {
 pub fn import_github_skills(urls: Vec<String>) -> Result<BatchImportResult, String> {
     let data_root = default_data_root()?;
     let agent = build_agent()?;
-    let mut archives: Vec<(String, Vec<u8>)> = Vec::new();
+    let mut archives: Vec<(String, String, Vec<u8>)> = Vec::new();
     let mut result = BatchImportResult { imported: Vec::new(), failed: Vec::new() };
 
     for url in urls {
@@ -365,17 +443,19 @@ pub fn import_github_skills(urls: Vec<String>) -> Result<BatchImportResult, Stri
             let (git_ref, subdir, path_commit) =
                 resolve_ref_and_commit(&agent, &parsed).map_err(|error| error.message())?;
             let key = format!("{}/{}@{git_ref}", parsed.owner, parsed.repo).to_lowercase();
-            if !archives.iter().any(|(known, _)| *known == key) {
+            if !archives.iter().any(|(known, _, _)| *known == key) {
                 let head = latest_commit(&agent, &parsed.owner, &parsed.repo, &git_ref, "")
                     .map_err(|error| error.message())?;
                 let bytes = download_zipball(&agent, &parsed.owner, &parsed.repo, &head)
                     .map_err(|error| error.message())?;
-                archives.push((key.clone(), bytes));
+                archives.push((key.clone(), head, bytes));
             }
-            let zip_bytes = &archives.iter().find(|(known, _)| *known == key).expect("archive was just added").1;
+            let (_, head, zip_bytes) =
+                archives.iter().find(|(known, _, _)| *known == key).expect("archive was just added");
+            let mut snapshot = open_snapshot(&agent, &parsed.owner, &parsed.repo, head, zip_bytes, &subdir)?;
             // The branch head holds the same folder content as the folder's own
             // last commit, which is what update checks compare against.
-            install_from_zip(zip_bytes, &parsed, &git_ref, &subdir, &path_commit, &data_root)
+            install_from_snapshot(snapshot.as_mut(), &parsed, &git_ref, &subdir, &path_commit, &data_root)
         })();
         match outcome {
             Ok(imported) => result.imported.push(imported),
@@ -597,13 +677,14 @@ fn update_skill_from_github_inner(
             .map_err(|error| error.message())?;
     let zip_bytes = download_zipball(&agent, &source.owner, &source.repo, &new_commit)
         .map_err(|error| error.message())?;
+    let mut snapshot = open_snapshot(&agent, &source.owner, &source.repo, &new_commit, &zip_bytes, &source.subdir)?;
 
     let skill_name = dir_skill_name(library_path);
     let staging_parent = unique_staging(data_root)?;
     let staging_skill = staging_parent.join(&skill_name);
 
     let prepared = (|| {
-        extract_subdir_from_zip(&zip_bytes, &source.subdir, &staging_skill)?;
+        snapshot::extract_subdir(snapshot.as_mut(), &source.subdir, &staging_skill)?;
         if !staging_skill.join("SKILL.md").is_file() {
             return Err(format!(
                 "No SKILL.md was found at '{}' in the repository.",
@@ -617,7 +698,7 @@ fn update_skill_from_github_inner(
         return Err(error);
     }
 
-    let variant_update = stage_variant_update(&zip_bytes, &source.subdir, data_root);
+    let variant_update = stage_variant_update(snapshot.as_mut(), &source.subdir, data_root);
     let outcome = apply_skill_update(
         library_path,
         &staging_skill,
@@ -870,26 +951,23 @@ pub(crate) fn repo_files(
     repo: &str,
     tree_ish: &str,
 ) -> Result<(Vec<(String, String)>, bool), GithubError> {
+    let (files, truncated) = repo_tree_files(agent, owner, repo, tree_ish)?;
+    Ok((files.into_iter().map(|file| (file.path, file.sha)).collect(), truncated))
+}
+
+/// Every file in the repository at a commit or branch, with sizes.
+fn repo_tree_files(
+    agent: &ureq::Agent,
+    owner: &str,
+    repo: &str,
+    tree_ish: &str,
+) -> Result<(Vec<TreeFile>, bool), GithubError> {
     let url = format!(
         "https://api.github.com/repos/{owner}/{repo}/git/trees/{}?recursive=1",
         encode_query(tree_ish)
     );
     let json = api_get_json(agent, &url)?;
-    let tree = json
-        .get("tree")
-        .and_then(|value| value.as_array())
-        .ok_or_else(|| GithubError::Other("Unexpected response from GitHub trees API.".to_string()))?;
-    let files = tree
-        .iter()
-        .filter(|item| item.get("type").and_then(|value| value.as_str()) == Some("blob"))
-        .filter_map(|item| {
-            let path = item.get("path")?.as_str()?.to_string();
-            let sha = item.get("sha")?.as_str()?.to_string();
-            Some((path, sha))
-        })
-        .collect();
-    let truncated = json.get("truncated").and_then(|value| value.as_bool()).unwrap_or(false);
-    Ok((files, truncated))
+    snapshot::parse_tree(&json).map_err(GithubError::Other)
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1234,24 +1312,20 @@ fn skill_md_name(contents: &str) -> Option<String> {
 /// Find the folder (relative to the repository root) that holds the skill:
 /// a SKILL.md whose `name` matches, else a folder with the same name, else the
 /// only SKILL.md in the repository.
-fn find_skill_subdir(zip_bytes: &[u8], skill_name: &str, folder_name: &str) -> Result<String, String> {
-    let mut archive = ZipArchive::new(Cursor::new(zip_bytes))
-        .map_err(|error| format!("Could not read the downloaded archive: {error}"))?;
+fn find_skill_subdir(snapshot: &mut dyn RepoSnapshot, skill_name: &str, folder_name: &str) -> Result<String, String> {
+    let dirs: Vec<String> = snapshot
+        .files()
+        .iter()
+        .filter_map(|(path, _)| match path.rsplit_once('/') {
+            Some((dir, "SKILL.md")) => Some(dir.to_string()),
+            None if path == "SKILL.md" => Some(String::new()),
+            _ => None,
+        })
+        .collect();
     let mut candidates: Vec<(String, Option<String>)> = Vec::new();
-    for index in 0..archive.len().min(MAX_ENTRIES) {
-        let mut entry = archive
-            .by_index(index)
-            .map_err(|error| format!("Could not read the archive: {error}"))?;
-        let name = entry.name().to_string();
-        let Some((top_and_dir, file)) = name.rsplit_once('/') else {
-            continue;
-        };
-        if file != "SKILL.md" {
-            continue;
-        }
-        let dir = top_and_dir.split_once('/').map(|(_, dir)| dir.to_string()).unwrap_or_default();
-        let mut contents = String::new();
-        let _ = (&mut entry).take(256 * 1024).read_to_string(&mut contents);
+    for dir in dirs {
+        let path = if dir.is_empty() { "SKILL.md".to_string() } else { format!("{dir}/SKILL.md") };
+        let contents = snapshot.read(&path).map(|bytes| String::from_utf8_lossy(&bytes).to_string()).unwrap_or_default();
         candidates.push((dir, skill_md_name(&contents)));
     }
 
@@ -1294,6 +1368,7 @@ fn update_from_detected_source(
     };
     let zip_bytes =
         download_zipball(&agent, &parsed.owner, &parsed.repo, &commit).map_err(|error| error.message())?;
+    let mut snapshot = open_snapshot(&agent, &parsed.owner, &parsed.repo, &commit, &zip_bytes, &subdir)?;
 
     let folder_name = dir_skill_name(library_path);
     if subdir.is_empty() {
@@ -1301,7 +1376,18 @@ fn update_from_detected_source(
             .ok()
             .and_then(|contents| skill_md_name(&contents))
             .unwrap_or_else(|| folder_name.clone());
-        subdir = find_skill_subdir(&zip_bytes, &skill_name, &folder_name)?;
+        subdir = match find_skill_subdir(snapshot.as_mut(), &skill_name, &folder_name) {
+            Ok(found) => found,
+            // The skill may sit in a folder the archive leaves out.
+            Err(error) => {
+                let Ok(mut tree) = tree_snapshot(&agent, &parsed.owner, &parsed.repo, &commit, &zip_bytes) else {
+                    return Err(error);
+                };
+                let found = find_skill_subdir(&mut tree, &skill_name, &folder_name)?;
+                snapshot = Box::new(tree);
+                found
+            }
+        };
         if !subdir.is_empty() {
             // Record the last commit that touched the skill's own folder, so
             // later checks only report changes to this skill.
@@ -1314,7 +1400,7 @@ fn update_from_detected_source(
     let staging_parent = unique_staging(data_root)?;
     let staging_skill = staging_parent.join(safe_folder_name(&folder_name, "github-skill"));
     let prepared = (|| {
-        extract_subdir_from_zip(&zip_bytes, &subdir, &staging_skill)?;
+        snapshot::extract_subdir(snapshot.as_mut(), &subdir, &staging_skill)?;
         if !staging_skill.join("SKILL.md").is_file() {
             return Err(format!("No SKILL.md was found at '{subdir}' in the repository."));
         }
@@ -1336,7 +1422,7 @@ fn update_from_detected_source(
         url: canonical_url(&parsed.owner, &parsed.repo, &git_ref, &subdir),
         variants: BTreeMap::new(),
     };
-    let variant_update = stage_variant_update(&zip_bytes, &subdir, data_root);
+    let variant_update = stage_variant_update(snapshot.as_mut(), &subdir, data_root);
     let outcome =
         apply_skill_update(library_path, &staging_skill, &source, &commit, data_root, target_profiles, variant_update);
     let _ = fs::remove_dir_all(&staging_parent);
@@ -1542,97 +1628,6 @@ fn classify_ureq_error(error: ureq::Error) -> GithubError {
     }
 }
 
-/// Extract just `subdir` (or the whole repo when empty) from a downloaded
-/// zipball into `dest`. The zipball's top-level folder name is read from the
-/// archive rather than reconstructed, and every entry path is validated.
-pub(crate) fn extract_subdir_from_zip(zip_bytes: &[u8], subdir: &str, dest: &Path) -> Result<(), String> {
-    let reader = Cursor::new(zip_bytes);
-    let mut archive =
-        ZipArchive::new(reader).map_err(|error| format!("Could not read the downloaded archive: {error}"))?;
-    if archive.is_empty() {
-        return Err("The downloaded archive was empty.".to_string());
-    }
-    if archive.len() > MAX_ENTRIES {
-        return Err("The downloaded archive has too many entries.".to_string());
-    }
-
-    let top = {
-        let first = archive
-            .by_index(0)
-            .map_err(|error| format!("Could not read the archive: {error}"))?;
-        first
-            .name()
-            .split('/')
-            .next()
-            .unwrap_or("")
-            .to_string()
-    };
-    if top.is_empty() {
-        return Err("The downloaded archive has an unexpected layout.".to_string());
-    }
-
-    let prefix = if subdir.is_empty() {
-        format!("{top}/")
-    } else {
-        format!("{top}/{}/", subdir.trim_matches('/'))
-    };
-
-    fs::create_dir_all(dest).map_err(|error| format!("Could not create the staging folder: {error}"))?;
-
-    let mut total_bytes: u64 = 0;
-    let mut wrote_any = false;
-
-    for index in 0..archive.len() {
-        let mut entry = archive
-            .by_index(index)
-            .map_err(|error| format!("Could not read the archive: {error}"))?;
-        let name = entry.name().to_string();
-        if !name.starts_with(&prefix) {
-            continue;
-        }
-        let relative = &name[prefix.len()..];
-        if relative.is_empty() {
-            continue;
-        }
-        if !is_safe_relative(relative) {
-            return Err(format!("The archive contains an unsafe path: {name}"));
-        }
-
-        let out_path = dest.join(relative);
-        if entry.is_dir() {
-            fs::create_dir_all(&out_path)
-                .map_err(|error| format!("Could not create {}: {error}", out_path.display()))?;
-            continue;
-        }
-
-        total_bytes = total_bytes.saturating_add(entry.size());
-        if total_bytes > MAX_TOTAL_BYTES {
-            return Err("The skill content is too large to import.".to_string());
-        }
-
-        if let Some(parent) = out_path.parent() {
-            fs::create_dir_all(parent)
-                .map_err(|error| format!("Could not create {}: {error}", parent.display()))?;
-        }
-        let mut bytes = Vec::new();
-        entry
-            .read_to_end(&mut bytes)
-            .map_err(|error| format!("Could not read {name}: {error}"))?;
-        fs::write(&out_path, &bytes)
-            .map_err(|error| format!("Could not write {}: {error}", out_path.display()))?;
-        wrote_any = true;
-    }
-
-    if !wrote_any {
-        return Err(if subdir.is_empty() {
-            "The repository appears to be empty.".to_string()
-        } else {
-            format!("Path '{subdir}' was not found in the repository.")
-        });
-    }
-    Ok(())
-}
-
 fn write_source_file(library_path: &Path, source: &GithubSource) -> Result<(), String> {
     let json = serde_json::to_string_pretty(source)
         .map_err(|error| format!("Could not serialize source metadata: {error}"))?;
@@ -1672,7 +1667,7 @@ fn encode_query(value: &str) -> String {
 mod tests {
     use super::*;
     use crate::fs_ops::test_temp_dir as unique_temp_dir;
-    use std::io::Write;
+    use std::io::{Cursor, Write};
     use zip::write::{SimpleFileOptions, ZipWriter};
 
     fn build_zip(entries: &[(&str, &[u8])]) -> Vec<u8> {
@@ -1687,6 +1682,101 @@ mod tests {
             zip.finish().unwrap();
         }
         buffer
+    }
+
+    fn extract_subdir_from_zip(zip_bytes: &[u8], subdir: &str, dest: &Path) -> Result<(), String> {
+        snapshot::extract_subdir(&mut ZipSnapshot::new(zip_bytes)?, subdir, dest)
+    }
+
+    fn install_from_zip(
+        zip_bytes: &[u8],
+        parsed: &GithubRef,
+        git_ref: &str,
+        subdir: &str,
+        synced_commit: &str,
+        data_root: &Path,
+    ) -> Result<GithubImportResult, String> {
+        install_from_snapshot(&mut ZipSnapshot::new(zip_bytes)?, parsed, git_ref, subdir, synced_commit, data_root)
+    }
+
+    #[test]
+    fn imports_a_skill_from_folders_the_archive_leaves_out() {
+        use crate::variants::tests::build_zip as repo_zip;
+        let data_root = unique_temp_dir("import-export-ignored");
+        let parsed = parse_github_url("https://github.com/o/r/tree/trunk/.agents/skills/dev").unwrap();
+        let agents = "---\nname: dev\ndescription: Dev cycle.\n---\n\nRun the tests, then lint, then ship.\n";
+        let claude = "---\nname: dev\ndescription: Dev cycle.\n---\n\nUse TodoWrite for each step, then ship.\n";
+        // `.agents/` and `.claude/` are export-ignored: the archive has neither.
+        let zip = repo_zip(&[("readme.txt", "plugin"), ("build/app.js", "js")]);
+        let mut archive = ZipSnapshot::new(&zip).unwrap();
+        assert!(!snapshot::has_dir(&archive, ".agents/skills/dev"));
+        let error = install_from_snapshot(&mut archive, &parsed, "trunk", ".agents/skills/dev", "c1", &data_root)
+            .unwrap_err();
+        assert!(error.contains("was not found"), "{error}");
+
+        let files = [
+            ("readme.txt", "plugin"),
+            ("build/app.js", "js"),
+            (".agents/skills/dev/SKILL.md", agents),
+            (".agents/skills/dev/references/steps.md", "1. test\n"),
+            (".claude/skills/dev/SKILL.md", claude),
+        ];
+        let (mut tree, requests) =
+            snapshot::tests::tree_snapshot(&files, Some(ZipSnapshot::new(&zip).unwrap()));
+        let imported =
+            install_from_snapshot(&mut tree, &parsed, "trunk", ".agents/skills/dev", "c1", &data_root).unwrap();
+        let library = PathBuf::from(&imported.library_path);
+        assert_eq!(fs::read_to_string(library.join("SKILL.md")).unwrap(), agents);
+        assert!(library.join("references").join("steps.md").is_file());
+        let source = read_source_file(&library).unwrap();
+        assert_eq!(source.subdir, ".agents/skills/dev");
+        assert_eq!(source.url, "https://github.com/o/r/tree/trunk/.agents/skills/dev");
+        assert_eq!(source.variants.get("claude-code").map(String::as_str), Some(".claude/skills/dev"));
+        let claude_version = data_root.join("variants").join("dev").join("claude-code").join("SKILL.md");
+        assert_eq!(fs::read_to_string(claude_version).unwrap(), claude);
+        assert_eq!(requests.get(), 3, "each left-out file is fetched once");
+        let _ = fs::remove_dir_all(&data_root);
+    }
+
+    #[test]
+    fn notices_gitattributes_hiding_other_tools_folders() {
+        use crate::variants::tests::build_zip as repo_zip;
+        let hiding = repo_zip(&[
+            (".gitattributes", "/.claude/ export-ignore\n/tests export-ignore\n"),
+            ("skills/dev/SKILL.md", "dev"),
+        ]);
+        assert!(hides_tool_folders(&mut ZipSnapshot::new(&hiding).unwrap(), "skills/dev"));
+
+        let harmless = repo_zip(&[(".gitattributes", "/tests export-ignore\n"), ("skills/dev/SKILL.md", "dev")]);
+        assert!(!hides_tool_folders(&mut ZipSnapshot::new(&harmless).unwrap(), "skills/dev"));
+        let none = repo_zip(&[("skills/dev/SKILL.md", "dev")]);
+        assert!(!hides_tool_folders(&mut ZipSnapshot::new(&none).unwrap(), "skills/dev"));
+    }
+
+    // Live: Automattic/wordpress-activitypub marks `/.agents/` and `/.claude/`
+    // export-ignore, so its zipball has neither. Run manually with
+    // `cargo test -- --ignored`.
+    #[test]
+    #[ignore = "hits the live GitHub API"]
+    fn live_imports_a_skill_from_an_export_ignored_folder() {
+        let data_root = unique_temp_dir("live-export-ignore");
+        let result = import_from_github_with_root(
+            "https://github.com/Automattic/wordpress-activitypub/tree/trunk/.agents/skills/dev",
+            &data_root,
+        )
+        .unwrap();
+        let library = PathBuf::from(&result.library_path);
+        let skill_md = fs::read_to_string(library.join("SKILL.md")).unwrap();
+        assert!(skill_md.contains("name:"), "{skill_md}");
+        let source = read_source_file(&library).unwrap();
+        assert_eq!((source.git_ref.as_str(), source.subdir.as_str()), ("trunk", ".agents/skills/dev"));
+        // `.claude/skills/dev` only points at the `.agents` one: not a version of its own.
+        assert!(source.variants.is_empty(), "{:?}", source.variants);
+
+        // Updating reads the same left-out folder again.
+        update_skill_from_github_inner(&library, &data_root, &[]).unwrap();
+        assert_eq!(fs::read_to_string(library.join("SKILL.md")).unwrap(), skill_md);
+        let _ = fs::remove_dir_all(&data_root);
     }
 
     #[test]
@@ -1715,12 +1805,12 @@ mod tests {
             ("repo-abc/skills/agent-reach/SKILL.md", b"---\nname: agent-reach\n---\n"),
             ("repo-abc/skills/other/SKILL.md", b"---\nname: other\n---\n"),
         ]);
-        assert_eq!(find_skill_subdir(&zip, "agent-reach", "x").unwrap(), "skills/agent-reach");
-        assert_eq!(find_skill_subdir(&zip, "unknown", "other").unwrap(), "skills/other");
-        assert!(find_skill_subdir(&zip, "unknown", "missing").is_err());
+        assert_eq!(find_skill_subdir(&mut ZipSnapshot::new(&zip).unwrap(), "agent-reach", "x").unwrap(), "skills/agent-reach");
+        assert_eq!(find_skill_subdir(&mut ZipSnapshot::new(&zip).unwrap(), "unknown", "other").unwrap(), "skills/other");
+        assert!(find_skill_subdir(&mut ZipSnapshot::new(&zip).unwrap(), "unknown", "missing").is_err());
 
         let single = build_zip(&[("repo-abc/SKILL.md", b"---\nname: whatever\n---\n")]);
-        assert_eq!(find_skill_subdir(&single, "agent-reach", "agent-reach").unwrap(), "");
+        assert_eq!(find_skill_subdir(&mut ZipSnapshot::new(&single).unwrap(), "agent-reach", "agent-reach").unwrap(), "");
     }
 
     #[test]
@@ -1937,7 +2027,7 @@ mod tests {
             fs::create_dir_all(&new_skill).unwrap();
             fs::write(new_skill.join("SKILL.md"), main(body)).unwrap();
             let source = read_source_file(&library).unwrap();
-            let staged = stage_variant_update(zip, "skills/dev", &data_root);
+            let staged = stage_variant_update(&mut ZipSnapshot::new(zip).unwrap(), "skills/dev", &data_root);
             let result = apply_skill_update(&library, &new_skill, &source, commit, &data_root, &profiles, staged).unwrap();
             let _ = fs::remove_dir_all(staging);
             result

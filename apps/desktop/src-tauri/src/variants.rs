@@ -12,18 +12,15 @@
 //! (`examples/`, `template/` …), which belong to no tool.
 
 use crate::fs_ops::{unique_timestamped_path, SOURCE_MARKER_FILE};
-use crate::github::extract_subdir_from_zip;
+use crate::snapshot::{extract_subdir, RepoSnapshot};
 use crate::trash::unique_trash_path;
 use serde::Serialize;
 use std::collections::BTreeMap;
 use std::fs;
-use std::io::{Cursor, Read};
 use std::path::{Path, PathBuf};
-use zip::ZipArchive;
 
 pub const VARIANTS_DIR: &str = "variants";
 const STAGING_PREFIX: &str = ".staging";
-const MAX_ENTRIES: usize = 10_000;
 /// Only candidate folders are read; this caps what they may add up to.
 const MAX_CANDIDATE_BYTES: u64 = 50 * 1024 * 1024;
 
@@ -66,28 +63,28 @@ fn tool_for_dir(dir: &str) -> Option<(&'static str, u8)> {
         .map(|(_, tool, rank)| (*tool, *rank))
 }
 
-/// Other tools' versions of the skill at `subdir` in a repository archive, as
-/// (tool id, folder relative to the repository root), sorted by tool.
-pub fn detect_in_zip(zip_bytes: &[u8], subdir: &str) -> Result<Vec<(String, String)>, String> {
+/// Where each tool would keep its own version of the skill at `subdir`.
+pub fn tool_folders(subdir: &str) -> Vec<String> {
+    let Some(name) = subdir.trim_matches('/').rsplit('/').next().filter(|name| !name.is_empty()) else {
+        return Vec::new();
+    };
+    TOOL_PREFIXES.iter().map(|(prefix, _, _)| format!("{prefix}{name}")).collect()
+}
+
+/// Other tools' versions of the skill at `subdir` in a repository, as (tool
+/// id, folder relative to the repository root), sorted by tool.
+pub fn detect(snapshot: &mut dyn RepoSnapshot, subdir: &str) -> Result<Vec<(String, String)>, String> {
     let subdir = subdir.trim_matches('/');
     let Some(name) = subdir.rsplit('/').next().filter(|name| !name.is_empty()) else {
-        return Ok(Vec::new());
-    };
-    let mut archive =
-        ZipArchive::new(Cursor::new(zip_bytes)).map_err(|error| format!("Could not read the archive: {error}"))?;
-    if archive.is_empty() || archive.len() > MAX_ENTRIES {
-        return Ok(Vec::new());
-    }
-    let names: Vec<String> = archive.file_names().map(str::to_string).collect();
-    let Some(top) = names.first().and_then(|first| first.split('/').next()).map(str::to_string) else {
         return Ok(Vec::new());
     };
     let own_tool = tool_for_dir(subdir).map(|(tool, _)| tool);
 
     // Folders with a SKILL.md, the same name, inside some tool's skills folder.
-    let mut candidates: Vec<(String, &'static str, u8)> = names
+    let mut candidates: Vec<(String, &'static str, u8)> = snapshot
+        .files()
         .iter()
-        .filter_map(|entry| entry.strip_prefix(&format!("{top}/"))?.strip_suffix("/SKILL.md").map(str::to_string))
+        .filter_map(|(path, _)| path.strip_suffix("/SKILL.md").map(str::to_string))
         .filter(|dir| dir != subdir && dir.rsplit('/').next() == Some(name))
         .filter_map(|dir| {
             let (tool, rank) = tool_for_dir(&dir)?;
@@ -101,7 +98,7 @@ pub fn detect_in_zip(zip_bytes: &[u8], subdir: &str) -> Result<Vec<(String, Stri
 
     let mut dirs: Vec<String> = candidates.iter().map(|(dir, _, _)| dir.clone()).collect();
     dirs.push(subdir.to_string());
-    let contents = read_dirs(&mut archive, &top, &dirs)?;
+    let contents = read_dirs(snapshot, &dirs)?;
     let empty = BTreeMap::new();
     let picked = contents.get(subdir).unwrap_or(&empty);
 
@@ -128,45 +125,41 @@ pub fn detect_in_zip(zip_bytes: &[u8], subdir: &str) -> Result<Vec<(String, Stri
 type DirFiles = BTreeMap<String, Vec<u8>>;
 
 /// The files (path relative to the folder -> bytes) of each folder in `dirs`.
-fn read_dirs(
-    archive: &mut ZipArchive<Cursor<&[u8]>>,
-    top: &str,
-    dirs: &[String],
-) -> Result<BTreeMap<String, DirFiles>, String> {
-    let prefixes: Vec<(String, &String)> = dirs.iter().map(|dir| (format!("{top}/{dir}/"), dir)).collect();
-    let mut contents: BTreeMap<String, DirFiles> = BTreeMap::new();
+fn read_dirs(snapshot: &mut dyn RepoSnapshot, dirs: &[String]) -> Result<BTreeMap<String, DirFiles>, String> {
+    let prefixes: Vec<(String, &String)> = dirs.iter().map(|dir| (format!("{dir}/"), dir)).collect();
+    // Sizes are checked before anything is read (a tree snapshot reads over the network).
+    let mut wanted = Vec::new();
     let mut total: u64 = 0;
-    for index in 0..archive.len() {
-        let mut entry = archive.by_index(index).map_err(|error| format!("Could not read the archive: {error}"))?;
-        if entry.is_dir() {
-            continue;
-        }
-        let entry_name = entry.name().to_string();
+    for (path, size) in snapshot.files() {
         // A folder can sit inside another candidate; the longest prefix owns the file.
         let Some((prefix, dir)) = prefixes
             .iter()
-            .filter(|(prefix, _)| entry_name.starts_with(prefix.as_str()))
+            .filter(|(prefix, _)| path.starts_with(prefix.as_str()))
             .max_by_key(|(prefix, _)| prefix.len())
         else {
             continue;
         };
-        total = total.saturating_add(entry.size());
+        total = total.saturating_add(*size);
         if total > MAX_CANDIDATE_BYTES {
             return Err("The tool versions in this repository are too large to compare.".to_string());
         }
-        let mut bytes = Vec::new();
-        entry.read_to_end(&mut bytes).map_err(|error| format!("Could not read {entry_name}: {error}"))?;
-        contents
-            .entry((*dir).clone())
-            .or_default()
-            .insert(entry_name[prefix.len()..].to_string(), bytes);
+        wanted.push((path.clone(), prefix.len(), (*dir).clone()));
+    }
+    let mut contents: BTreeMap<String, DirFiles> = BTreeMap::new();
+    for (path, prefix_len, dir) in wanted {
+        let bytes = snapshot.read(&path)?;
+        contents.entry(dir).or_default().insert(path[prefix_len..].to_string(), bytes);
     }
     Ok(contents)
 }
 
 /// Extract the found versions into one staging folder (`<staging>/<tool id>`).
 /// `None` when nothing was found.
-pub fn stage(zip_bytes: &[u8], found: &[(String, String)], data_root: &Path) -> Result<Option<PathBuf>, String> {
+pub fn stage(
+    snapshot: &mut dyn RepoSnapshot,
+    found: &[(String, String)],
+    data_root: &Path,
+) -> Result<Option<PathBuf>, String> {
     if found.is_empty() {
         return Ok(None);
     }
@@ -174,7 +167,7 @@ pub fn stage(zip_bytes: &[u8], found: &[(String, String)], data_root: &Path) -> 
     fs::create_dir_all(&root).map_err(|error| format!("Could not create the versions folder: {error}"))?;
     let staging = unique_timestamped_path(&root, STAGING_PREFIX);
     for (tool, dir) in found {
-        if let Err(error) = extract_subdir_from_zip(zip_bytes, dir, &staging.join(tool)) {
+        if let Err(error) = extract_subdir(snapshot, dir, &staging.join(tool)) {
             let _ = fs::remove_dir_all(&staging);
             return Err(error);
         }
@@ -263,7 +256,8 @@ fn recorded_variants(library_skill_dir: &Path) -> BTreeMap<String, String> {
 pub(crate) mod tests {
     use super::*;
     use crate::fs_ops::test_temp_dir;
-    use std::io::Write;
+    use crate::snapshot::ZipSnapshot;
+    use std::io::{Cursor, Write};
     use zip::write::SimpleFileOptions;
     use zip::ZipWriter;
 
@@ -278,6 +272,10 @@ pub(crate) mod tests {
             zip.finish().unwrap();
         }
         buffer
+    }
+
+    fn detect_in_zip(zip_bytes: &[u8], subdir: &str) -> Result<Vec<(String, String)>, String> {
+        detect(&mut ZipSnapshot::new(zip_bytes)?, subdir)
     }
 
     const FULL: &str = "---\nname: dev\ndescription: Dev cycle.\n---\n\n# Dev\n\nRun the tests, then lint, then ship. This is the full guide with every step spelled out.\n";
@@ -321,6 +319,30 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn versions_in_folders_the_archive_leaves_out_are_found_through_the_tree() {
+        // The archive has neither folder (both export-ignored).
+        let zip = build_zip(&[("README.md", "readme")]);
+        let claude = "---\nname: dev\n---\n\nUse TodoWrite to track each step of the cycle, then ship.\n";
+        let files = [
+            ("README.md", "readme"),
+            (".agents/skills/dev/SKILL.md", FULL),
+            (".claude/skills/dev/SKILL.md", claude),
+            (".claude/skills/other/SKILL.md", "other"),
+        ];
+        let (mut snapshot, requests) =
+            crate::snapshot::tests::tree_snapshot(&files, Some(ZipSnapshot::new(&zip).unwrap()));
+        let found = detect(&mut snapshot, ".agents/skills/dev").unwrap();
+        assert_eq!(found, vec![("claude-code".to_string(), ".claude/skills/dev".to_string())]);
+        assert_eq!(requests.get(), 2, "only the two candidate folders are read");
+
+        let data_root = test_temp_dir("variants-tree");
+        let staged = stage(&mut snapshot, &found, &data_root).unwrap().unwrap();
+        assert_eq!(fs::read_to_string(staged.join("claude-code").join("SKILL.md")).unwrap(), claude);
+        assert_eq!(requests.get(), 2, "blobs already read are not fetched again");
+        let _ = fs::remove_dir_all(data_root);
+    }
+
+    #[test]
     fn staged_versions_become_what_each_tool_gets() {
         let data_root = test_temp_dir("variants-place");
         let library_skill = data_root.join("library").join("dev");
@@ -334,7 +356,7 @@ pub(crate) mod tests {
         let zip = build_zip(&[(".claude/skills/dev/SKILL.md", "claude version"), (".agents/skills/dev/SKILL.md", FULL)]);
 
         let found = vec![("claude-code".to_string(), ".claude/skills/dev".to_string())];
-        let staged = stage(&zip, &found, &data_root).unwrap().unwrap();
+        let staged = stage(&mut ZipSnapshot::new(&zip).unwrap(), &found, &data_root).unwrap().unwrap();
         put_in_place(&data_root, "dev", Some(&staged)).unwrap();
 
         let claude = effective_source(&library_skill, "claude-code");
