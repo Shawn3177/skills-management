@@ -1,11 +1,11 @@
 use crate::fs_ops::{
-    default_data_root, excluded_entries, is_excluded_entry, is_internal_marker, is_safe_relative,
-    safe_folder_name, unix_ms,
+    default_data_root, excluded_entries, is_excluded_entry, is_internal_marker, is_link,
+    is_safe_relative, safe_folder_name, unique_timestamped_path, unix_ms,
 };
-use crate::library::import_skill_to_library_with_root;
+use crate::library::{import_skill_to_library_with_root, write_origin_marker};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -14,6 +14,9 @@ use zip::{ZipArchive, ZipWriter};
 
 const FORMAT_VERSION: u32 = 1;
 const SOURCE_APP_VERSION: &str = env!("CARGO_PKG_VERSION");
+/// Import limits, so a hostile or corrupt package cannot exhaust memory/disk.
+const MAX_ENTRIES: usize = 10_000;
+const MAX_TOTAL_BYTES: u64 = 200 * 1024 * 1024; // 200 MB uncompressed
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -43,6 +46,8 @@ pub struct ExportResult {
 #[serde(rename_all = "camelCase")]
 pub struct ImportPackResult {
     pub imported: usize,
+    /// Library folders created by this import (for enabling them right away).
+    pub library_paths: Vec<String>,
     pub skill_count: usize,
     pub message: String,
 }
@@ -76,15 +81,8 @@ pub fn export_skillpack(
         return Err("No skills selected for export.".to_string());
     }
 
-    let file =
-        File::create(&destination).map_err(|error| format!("Could not create package: {error}"))?;
-    let mut zip = ZipWriter::new(file);
-    let options = SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
-
-    let mut checksums: BTreeMap<String, String> = BTreeMap::new();
-    let mut manifest_skills: Vec<ManifestSkill> = Vec::new();
-    let mut used_names: BTreeMap<String, usize> = BTreeMap::new();
-
+    // Validate everything before touching the destination, so a bad selection
+    // never truncates an existing file.
     for source in &sources {
         let source_path = Path::new(&source.source_path);
         if !source_path.is_dir() {
@@ -99,16 +97,60 @@ pub fn export_skillpack(
                 source.source_path
             ));
         }
+    }
 
+    // Write next to the destination, then rename over it: an interrupted or
+    // failed export leaves the previous file (if any) untouched.
+    let destination_path = PathBuf::from(&destination);
+    let parent = destination_path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    let partial = unique_timestamped_path(parent, ".skillpack-export.partial");
+
+    let written = write_skillpack(&sources, &partial)
+        .and_then(|()| {
+            fs::rename(&partial, &destination_path)
+                .map_err(|error| format!("Could not save package: {error}"))
+        });
+    if let Err(error) = written {
+        let _ = fs::remove_file(&partial);
+        return Err(error);
+    }
+
+    Ok(ExportResult {
+        skill_count: sources.len(),
+        destination,
+        message: format!("Exported {} skill(s).", sources.len()),
+    })
+}
+
+fn write_skillpack(sources: &[ExportSkillInput], path: &Path) -> Result<(), String> {
+    let file = File::create(path).map_err(|error| format!("Could not create package: {error}"))?;
+    let mut zip = ZipWriter::new(file);
+    let options = SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+
+    let mut checksums: BTreeMap<String, String> = BTreeMap::new();
+    let mut manifest_skills: Vec<ManifestSkill> = Vec::new();
+    let mut used_names: BTreeMap<String, usize> = BTreeMap::new();
+
+    for source in sources {
         let safe_name = dedupe_name(&mut used_names, safe_folder_name(&source.name, "imported-skill"));
         let prefix = format!("skills/{safe_name}");
 
-        add_dir_to_zip(&mut zip, options, source_path, &prefix, &mut checksums)?;
+        add_dir_to_zip(
+            &mut zip,
+            options,
+            Path::new(&source.source_path),
+            &prefix,
+            &mut checksums,
+        )?;
 
-        let mut target_states = BTreeMap::new();
-        for target in &source.targets {
-            target_states.insert(target.id.clone(), target.enabled);
-        }
+        let target_states = source
+            .targets
+            .iter()
+            .map(|target| (target.id.clone(), target.enabled))
+            .collect();
 
         manifest_skills.push(ManifestSkill {
             name: source.name.clone(),
@@ -136,12 +178,7 @@ pub fn export_skillpack(
 
     zip.finish()
         .map_err(|error| format!("Could not finalize package: {error}"))?;
-
-    Ok(ExportResult {
-        skill_count: sources.len(),
-        destination,
-        message: format!("Exported {} skill(s).", sources.len()),
-    })
+    Ok(())
 }
 
 fn dedupe_name(used: &mut BTreeMap<String, usize>, name: String) -> String {
@@ -169,16 +206,21 @@ fn add_dir_to_zip(
         let name = entry.file_name();
         let name_text = name.to_string_lossy();
 
-        if is_excluded_entry(&name_text) || is_internal_marker(&name_text) {
+        // Links are never followed: they could loop or pull in files from
+        // outside the skill folder (e.g. credentials) into a shared package.
+        if is_excluded_entry(&name_text) || is_internal_marker(&name_text) || is_link(&entry) {
             continue;
         }
 
         let entry_path = entry.path();
         let zip_path = format!("{prefix}/{name_text}");
+        let file_type = entry
+            .file_type()
+            .map_err(|error| format!("Could not read {}: {error}", entry_path.display()))?;
 
-        if entry_path.is_dir() {
+        if file_type.is_dir() {
             add_dir_to_zip(zip, options, &entry_path, &zip_path, checksums)?;
-        } else if entry_path.is_file() {
+        } else if file_type.is_file() {
             let bytes = fs::read(&entry_path)
                 .map_err(|error| format!("Could not read {}: {error}", entry_path.display()))?;
             zip.start_file(zip_path.as_str(), options)
@@ -205,6 +247,9 @@ pub fn import_skillpack_with_root(
         File::open(package_path).map_err(|error| format!("Could not open package: {error}"))?;
     let mut archive =
         ZipArchive::new(file).map_err(|error| format!("Could not read package: {error}"))?;
+    if archive.len() > MAX_ENTRIES {
+        return Err("Package has too many entries.".to_string());
+    }
 
     let manifest = read_manifest(&mut archive)?;
     if manifest.format_version > FORMAT_VERSION {
@@ -213,14 +258,18 @@ pub fn import_skillpack_with_root(
             manifest.format_version
         ));
     }
+    validate_manifest_paths(&manifest)?;
 
-    let staging = unique_staging(data_root)?;
+    fs::create_dir_all(data_root)
+        .map_err(|error| format!("Could not create data root: {error}"))?;
+    let staging = unique_timestamped_path(data_root, ".skillpack-import");
     if let Err(error) = extract_and_verify(&mut archive, &manifest, &staging) {
         let _ = fs::remove_dir_all(&staging);
         return Err(error);
     }
 
     let mut imported = 0usize;
+    let mut library_paths = Vec::new();
     let mut import_error: Option<String> = None;
 
     for skill in &manifest.skills {
@@ -229,6 +278,15 @@ pub fn import_skillpack_with_root(
             Ok(result) => {
                 if result.imported || result.already_managed {
                     imported += 1;
+                    let package = package_path
+                        .file_name()
+                        .map(|name| name.to_string_lossy().to_string())
+                        .unwrap_or_default();
+                    let _ = write_origin_marker(
+                        Path::new(&result.library_path),
+                        &serde_json::json!({ "kind": "skillpack", "package": package }),
+                    );
+                    library_paths.push(result.library_path);
                 }
             }
             Err(error) => import_error = Some(error),
@@ -243,17 +301,41 @@ pub fn import_skillpack_with_root(
 
     Ok(ImportPackResult {
         imported,
+        library_paths,
         skill_count: manifest.skills.len(),
         message: format!("Imported {imported} skill(s) into the shared library."),
     })
 }
 
+/// Every manifest skill path must be exactly `skills/<folder>` and unique, so
+/// a crafted package cannot point the importer at a folder outside staging
+/// (an absolute path would replace the staging root when joined).
+fn validate_manifest_paths(manifest: &Manifest) -> Result<(), String> {
+    let mut seen = BTreeSet::new();
+    for skill in &manifest.skills {
+        let path = skill.path.replace('\\', "/");
+        let mut parts = path.split('/');
+        let valid = parts.next() == Some("skills")
+            && parts.next().is_some_and(|folder| !folder.is_empty())
+            && parts.next().is_none()
+            && is_safe_relative(&skill.path);
+        if !valid {
+            return Err(format!("Package lists an invalid skill path: {}", skill.path));
+        }
+        if !seen.insert(path) {
+            return Err(format!("Package lists the skill path {} twice.", skill.path));
+        }
+    }
+    Ok(())
+}
+
 fn read_manifest(archive: &mut ZipArchive<File>) -> Result<Manifest, String> {
-    let mut manifest_file = archive
+    let manifest_file = archive
         .by_name("manifest.json")
         .map_err(|_| "Package is missing manifest.json.".to_string())?;
     let mut contents = String::new();
     manifest_file
+        .take(16 * 1024 * 1024)
         .read_to_string(&mut contents)
         .map_err(|error| format!("Could not read manifest: {error}"))?;
     serde_json::from_str(&contents).map_err(|error| format!("Invalid manifest: {error}"))
@@ -265,9 +347,10 @@ fn extract_and_verify(
     staging: &Path,
 ) -> Result<(), String> {
     let mut computed: BTreeMap<String, String> = BTreeMap::new();
+    let mut total_bytes: u64 = 0;
 
     for index in 0..archive.len() {
-        let mut entry = archive
+        let entry = archive
             .by_index(index)
             .map_err(|error| format!("Could not read package entry: {error}"))?;
         let name = entry.name().to_string();
@@ -279,10 +362,18 @@ fn extract_and_verify(
             return Err(format!("Package contains an unsafe path: {name}"));
         }
 
+        // Bound the read by the remaining budget rather than trusting the
+        // size the archive declares.
+        let budget = MAX_TOTAL_BYTES - total_bytes;
         let mut bytes = Vec::new();
         entry
+            .take(budget + 1)
             .read_to_end(&mut bytes)
             .map_err(|error| format!("Could not read {name}: {error}"))?;
+        total_bytes += bytes.len() as u64;
+        if total_bytes > MAX_TOTAL_BYTES {
+            return Err("Package content is too large to import.".to_string());
+        }
         computed.insert(name.clone(), sha256_hex(&bytes));
 
         let destination = staging.join(&name);
@@ -305,22 +396,6 @@ fn extract_and_verify(
     Ok(())
 }
 
-fn unique_staging(data_root: &Path) -> Result<PathBuf, String> {
-    fs::create_dir_all(data_root).map_err(|error| format!("Could not create data root: {error}"))?;
-    for index in 0.. {
-        let suffix = if index == 0 {
-            String::new()
-        } else {
-            format!("-{index}")
-        };
-        let candidate = data_root.join(format!(".skillpack-import-{}{suffix}", unix_ms()));
-        if !candidate.exists() {
-            return Ok(candidate);
-        }
-    }
-    unreachable!("unbounded staging index should always find an available folder")
-}
-
 fn sha256_hex(bytes: &[u8]) -> String {
     Sha256::digest(bytes)
         .iter()
@@ -331,15 +406,76 @@ fn sha256_hex(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::{SystemTime, UNIX_EPOCH};
+    use crate::fs_ops::test_temp_dir as unique_temp_dir;
 
-    fn unique_temp_dir(prefix: &str) -> PathBuf {
-        let stamp = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        std::env::temp_dir().join(format!("skills-manage-pack-{prefix}-{stamp}"))
+    fn write_raw_package(pkg: &Path, skill_path: &str) {
+        let file = File::create(pkg).unwrap();
+        let mut zip = ZipWriter::new(file);
+        let options = SimpleFileOptions::default();
+        zip.start_file("skills/x/SKILL.md", options).unwrap();
+        zip.write_all(b"# x\n").unwrap();
+        let manifest = serde_json::json!({
+            "formatVersion": 1,
+            "packageId": "p",
+            "createdAt": 0,
+            "sourceAppVersion": "0.1.0",
+            "exclusions": [],
+            "skills": [{ "name": "x", "path": skill_path, "targetStates": {} }],
+            "checksums": {}
+        });
+        zip.start_file("manifest.json", options).unwrap();
+        zip.write_all(manifest.to_string().as_bytes()).unwrap();
+        zip.finish().unwrap();
     }
+
+    #[test]
+    fn import_rejects_manifest_paths_outside_staging() {
+        let work = unique_temp_dir("pack-bad-path");
+        let outside = work.join("outside-skill");
+        fs::create_dir_all(&outside).unwrap();
+        fs::write(outside.join("SKILL.md"), "# outside\n").unwrap();
+        let data_root = work.join("data");
+
+        for bad_path in [
+            outside.display().to_string(),
+            "skills/../../outside-skill".to_string(),
+            "other/x".to_string(),
+            "skills".to_string(),
+        ] {
+            let pkg = work.join("bad.skillpack");
+            write_raw_package(&pkg, &bad_path);
+            let error = import_skillpack_with_root(&pkg, &data_root).unwrap_err();
+            assert!(error.contains("invalid skill path"), "{bad_path}: {error}");
+        }
+        assert!(!data_root.join("library").exists());
+
+        fs::remove_dir_all(work).unwrap();
+    }
+
+    #[test]
+    fn failed_export_keeps_existing_destination() {
+        let work = unique_temp_dir("pack-export-fail");
+        fs::create_dir_all(&work).unwrap();
+        let pkg = work.join("existing.skillpack");
+        fs::write(&pkg, "previous").unwrap();
+
+        let error = export_skillpack(
+            vec![ExportSkillInput {
+                source_path: work.join("missing").display().to_string(),
+                name: "missing".to_string(),
+                targets: vec![],
+            }],
+            pkg.display().to_string(),
+        )
+        .unwrap_err();
+
+        assert!(error.contains("not a directory"));
+        assert_eq!(fs::read_to_string(&pkg).unwrap(), "previous");
+        assert_eq!(fs::read_dir(&work).unwrap().count(), 1);
+
+        fs::remove_dir_all(work).unwrap();
+    }
+
 
     fn make_skill(dir: &Path, name: &str) {
         fs::create_dir_all(dir.join("scripts")).unwrap();
@@ -386,7 +522,10 @@ mod tests {
         assert!(imported_dir.join("scripts").join("run.ps1").is_file());
         assert!(!imported_dir.join(".git").exists());
         assert!(!imported_dir.join(".env").exists());
-        assert!(!imported_dir.join(".skills-manage-source.json").exists());
+        // The exported marker ("{}") is not carried over; the origin says .skillpack.
+        let origin = fs::read_to_string(imported_dir.join(".skills-manage-source.json")).unwrap();
+        assert!(origin.contains("\"kind\": \"skillpack\""), "{origin}");
+        assert!(origin.contains("alpha.skillpack"), "{origin}");
 
         let leftover_staging = fs::read_dir(&data_root)
             .unwrap()

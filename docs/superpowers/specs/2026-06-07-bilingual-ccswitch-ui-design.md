@@ -225,3 +225,18 @@ Manual visual verification:
 - CC Switch add provider image: https://ccswitch.ai/cc-switch-add.png
 - Existing v1 technical design: `docs/superpowers/specs/2026-06-03-skills-manage-v1-technical-design.md`
 - Project rules: `AGENTS.md`
+
+## Revision 2026-10-20: classic CC Switch layout
+
+Reviewed on a Claude Design canvas (pages "CC Switch 经典" and earlier alternatives). This revision supersedes the sidebar layout, the separate "Imported" tab, the top-bar language switch, and the 44px sizing described above.
+
+- **No sidebar.** The main screen's top bar holds the blue app title with a settings gear, a gray pill switcher (全部 / Claude Code / Codex / VS Code "coming soon", each with a count), a framed sync button (orange dot when GitHub updates are known), and an orange round "+" for adding skills.
+- **全部 (default tab):** every shared-library skill as a large white rounded card. Each card has one chip per tool (green with a check when enabled); clicking a chip enables or disables that tool. Broken skills show the reason in red and their chips are disabled.
+- **Per-tool tabs:** the same cards with an "已启用" badge and a single 启用 / 停用 button for that tool.
+- **Skills only in a tool's folder** (not managed copies, not the original of an imported library skill) are listed below a divider with a "仅在 <tool>" tag and a "加入共享库" button. Importing a tool's own folder adopts that folder as the tool's managed copy, so it shows as enabled there instead of conflicting.
+- **Sub-pages** (CC Switch's add-provider pattern): a square back button and title, white panels, chips for choices, and a footer bar.
+  - 技能详情: enable-in chips, warnings, source / location / files, and 移出共享库 (two-step; managed copies and the library folder go to trash), 打开文件夹, 导出 .skillpack.
+  - 添加技能: source chips (本地文件夹 scans a chosen folder and lists only skills not already in the library; GitHub; .skillpack) and "添加后启用到" chips.
+  - 包与同步: GitHub update check and per-skill update, export of the whole library.
+  - 设置: language, data folder, trash (two-step clear of items older than 30 days), GitHub token status, version.
+- **Color and size:** white ground, gray neutrals, blue for primary actions and selection, orange only for the add button and the update dot, green for enabled. 32–36px mouse-sized controls with a visible 2px focus ring.

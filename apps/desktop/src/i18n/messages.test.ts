@@ -30,36 +30,31 @@ describe("messages", () => {
   });
 
   it("returns localized messages and falls back to the key for missing messages", () => {
-    expect(getMessage("zh-CN", "nav.skills")).toBe("技能");
-    expect(getMessage("en-US", "nav.skills")).toBe("Skills");
+    expect(getMessage("zh-CN", "tabs.all")).toBe("全部");
+    expect(getMessage("en-US", "tabs.all")).toBe("All");
     expect(getMessage("zh-CN", "missing.key")).toBe("missing.key");
   });
 
-  it("includes compact drawer and scan summary messages", () => {
-    expect(getMessage("zh-CN", "drawer.selectedSkill")).toBe("已选择技能");
-    expect(getMessage("en-US", "drawer.selectedSkill")).toBe("Selected skill");
-    expect(
-      getMessage("zh-CN", "status.readyCompact").replace("{total}", "4").replace("{healthy}", "2").replace("{warnings}", "1"),
-    ).toBe("4 个技能 · 2 健康 · 1 待检查");
-  });
-
   it("interpolates named parameters", () => {
-    expect(
-      formatMessage("zh-CN", "actions.enablingSkillForTarget", {
-        skillName: "agent-tool-safety",
-        targetName: "Codex",
-      }),
-    ).toBe("正在为 Codex 启用 agent-tool-safety。");
-
-    expect(
-      formatMessage("en-US", "actions.enablingSkillForTarget", {
-        skillName: "agent-tool-safety",
-        targetName: "Codex",
-      }),
-    ).toBe("Enabling agent-tool-safety for Codex.");
+    expect(formatMessage("zh-CN", "actions.enableIn", { skill: "代码审查", tool: "Codex" })).toBe(
+      "在 Codex 中启用 代码审查",
+    );
+    expect(formatMessage("en-US", "actions.enableIn", { skill: "review", tool: "Codex" })).toBe(
+      "Enable review in Codex",
+    );
+    expect(formatMessage("en-US", "summary.tool", { total: 4, tool: "Codex" })).toBe(
+      "4 skills in the shared library, {count} enabled in Codex",
+    );
   });
 
   it("keeps message keys aligned across locales", () => {
     expect(Object.keys(messages["zh-CN"]).sort()).toEqual(Object.keys(messages["en-US"]).sort());
+  });
+
+  it("uses the same placeholders in both locales", () => {
+    const placeholders = (text: string) => (text.match(/\{\w+\}/g) ?? []).sort();
+    for (const key of Object.keys(messages["zh-CN"]) as Array<keyof (typeof messages)["zh-CN"]>) {
+      expect(placeholders(messages["en-US"][key]), key).toEqual(placeholders(messages["zh-CN"][key]));
+    }
   });
 });

@@ -28,9 +28,22 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/desktop/src-tauri
+
       - name: Install dependencies
         working-directory: apps/desktop
         run: npm ci
+
+      - name: Test frontend
+        working-directory: apps/desktop
+        run: npm test -- --run
+
+      - name: Test backend
+        working-directory: apps/desktop/src-tauri
+        run: cargo test --locked
 
       - name: Build Windows app
         working-directory: apps/desktop

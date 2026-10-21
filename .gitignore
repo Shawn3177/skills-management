@@ -3,3 +3,4 @@ preview.html
 .codex-logs/
 .codex-artifacts/
 design-qa.md
+__pycache__/
