@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { SkillRecord, ToolId } from "./skills";
+import type { CompatFinding, CompatLevel, SkillRecord, ToolId } from "./skills";
 
 export type AppStatus = {
   appName: string;
@@ -28,6 +28,16 @@ export type TargetToggleResult = {
   changed: boolean;
   targetPath: string;
   message: string;
+};
+
+export type CompatReport = {
+  targetId: string;
+  targetName: string;
+  level: CompatLevel;
+  /** The frontmatter `compatibility` text, when the author wrote one. */
+  declared: string | null;
+  findings: CompatFinding[];
+  acknowledged: boolean;
 };
 
 export type RemoveResult = { skillName: string; removedFrom: string[]; message: string };
@@ -128,6 +138,9 @@ export const api = {
       "set_skill_target_enabled",
       replaceExisting ? { sourcePath, targetId, enabled, replaceExisting } : { sourcePath, targetId, enabled },
     ),
+  checkCompat: (sourcePath: string, targetId: ToolId) => invoke<CompatReport>("check_skill_compat", { sourcePath, targetId }),
+  acknowledgeCompat: (sourcePath: string, targetId: ToolId) =>
+    invoke<CompatReport>("acknowledge_skill_compat", { sourcePath, targetId }),
   updateMetadata: (libraryPath: string, name: string, description: string) =>
     invoke<{ name: string; refreshedTargets: string[]; failedTargets: string[] }>("update_skill_metadata", {
       libraryPath,

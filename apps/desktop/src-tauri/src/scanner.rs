@@ -35,6 +35,8 @@ pub struct ScannedSkill {
     /// Specific problems with SKILL.md: "unreadable", "missing-name",
     /// "missing-description".
     pub issues: Vec<String>,
+    /// Library skills: the tools it may not suit, so enabling there can warn.
+    pub compat: Vec<crate::compat::CompatSummary>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -178,6 +180,7 @@ fn scan_skill_dir(
             detected_source_url: None,
             linked_source: false,
             issues: vec!["unreadable".to_string()],
+            compat: Vec::new(),
         });
     };
     let metadata = parse_skill_metadata(&contents);
@@ -206,6 +209,12 @@ fn scan_skill_dir(
         (linked, is_linked)
     };
 
+    let compat = if source_label(root) == "Shared Library" {
+        crate::compat::library_skill_summaries(skill_dir)
+    } else {
+        Vec::new()
+    };
+
     Some(ScannedSkill {
         id: skill_id(&name, skill_dir),
         name,
@@ -224,6 +233,7 @@ fn scan_skill_dir(
         detected_source_url,
         linked_source,
         issues,
+        compat,
     })
 }
 
@@ -529,6 +539,30 @@ mod tests {
     use super::*;
     use crate::fs_ops::test_temp_dir as unique_temp_dir;
     use std::fs;
+
+    #[test]
+    fn library_skills_report_tools_they_may_not_suit() {
+        let temp_root = unique_temp_dir("scan-compat");
+        let library_root = temp_root.join(".skills-manage").join("library");
+        let claude_root = temp_root.join(".claude").join("skills");
+        let body = "---\nname: todo\ndescription: Todo\n---\n\nTrack steps with TodoWrite.\n";
+        for root in [&library_root, &claude_root] {
+            fs::create_dir_all(root.join("todo")).unwrap();
+            fs::write(root.join("todo").join("SKILL.md"), body).unwrap();
+        }
+
+        let skills = scan_skill_roots_with_target_roots(&[library_root.clone(), claude_root.clone()], &[]);
+        let library = skills.iter().find(|skill| skill.source == "Shared Library").unwrap();
+        let in_claude = skills.iter().find(|skill| skill.source == "Claude Code").unwrap();
+
+        let codex = library.compat.iter().find(|entry| entry.target_id == "codex").unwrap();
+        assert_eq!(codex.level, crate::compat::CompatLevel::Degraded);
+        assert_eq!(codex.first.token, "TodoWrite");
+        assert!(library.compat.iter().all(|entry| entry.target_id != "claude-code"));
+        assert!(in_claude.compat.is_empty());
+
+        fs::remove_dir_all(temp_root).unwrap();
+    }
 
     #[test]
     fn scan_skill_roots_finds_directory_with_skill_markdown() {
