@@ -154,6 +154,28 @@ blob id 和当前 SKILL.md 一致，就视为已确认。从 GitHub 更新后内
 
 识别只在导入和更新时运行。详情页加一个"检测其他版本"按钮，手动触发一次，需要下载一次 zip。
 
+### PR 2 实际实现（2026-10-21）
+
+和上面计划相比的取舍：
+
+- **有没有专属版本，以磁盘为准。** 也就是 `variants/<skill>/<tool>/SKILL.md` 在不在。`source.json` 里的 `variants` 只用来显示来源路径和更新时比对。marker 不加 `variant` 字段，因为不需要。
+- **读 zip 很省。** 第一遍只看文件名，找出同名、又在工具目录下的候选目录。第二遍只读这些候选目录和用户选中的目录，最多读 50 MB。
+- **适配检查跟着版本走（计划里漏了的一点）。** 某个工具有专属版本时，这个工具的适配提醒按专属版本判断，"已确认适配"也按专属版本的 SKILL.md 记。
+- **编辑名称和描述时，专属版本的 frontmatter 一起改。** 不然保存后 Codex 那份还是旧名字。
+- **更新时专属版本一起换。** 换的时机在库里那份换完之后、刷新各工具副本之前，所以每个工具都拿到新版本。仓库不再提供某个工具的版本时，那个工具改回用主版本，更新结果里会写一句"Using the main version again for: Codex."。
+- **识别失败不影响导入。** 导入或更新时专属版本读不出来，导入照常完成。更新时读不出来就保留原来的专属版本。
+- **手动切换（`variant-prefs.json`）和"检测其他版本"按钮留到 PR 3。**
+
+用真实仓库试过：
+
+- `Kanevry/session-orchestrator` 的 `skills/autopilot`：识别出 Codex 版本 `.codex-plugin/skills/autopilot`，优先于通用的 `.agents` 版。`.cursor` 和 `.claude` 下的两份都是指针，被丢掉。
+- `DexForce/EmbodiChain` 的 `.claude/skills/add-atomic-action`：识别出 Codex 版本 `.agents/skills/add-atomic-action`。
+
+已知限制：
+
+- **被 `export-ignore` 的目录看不到。** GitHub 生成 zip 时会跳过 `.gitattributes` 里标了 `export-ignore` 的目录，比如 `Automattic/wordpress-activitypub` 就把 `/.agents/`、`/.claude/` 标掉了。这种仓库里的专属版本识别不到，而且从这些目录导入本身就会失败，报"路径不存在"，这是 PR 2 之前就有的问题。要解决得改成用 git trees + blobs API 下载，单独处理。
+- **用户导入的就是指针时不会自动纠正。** 比如直接导入 Automattic 的 `.claude/skills/dev` 那个指针，PR 2 不会自动换成它指向的那份。不过适配检查会把它标成"所有工具都不适配"。
+
 ## 分批交付
 
 | PR | 内容 | 依赖 |
