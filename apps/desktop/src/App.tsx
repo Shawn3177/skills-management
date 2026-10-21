@@ -1,1198 +1,895 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
-import { open, save } from "@tauri-apps/plugin-dialog";
-import { ArrowLeft, ArrowRightLeft, Boxes, Download, FolderInput, GitBranch, LayoutGrid, RefreshCw, Search, Settings, ToggleRight } from "lucide-react";
+import { save } from "@tauri-apps/plugin-dialog";
+import { openUrl, revealItemInDir } from "@tauri-apps/plugin-opener";
+import { FolderGit2, Package, Plus, Settings } from "lucide-react";
 import "./App.css";
-import { LanguageSwitch } from "./components/LanguageSwitch";
-import {
-  hasSource,
-  healthIcons,
-  originIcons,
-  SkillSourceGroup,
-  SkillDetail,
-  SkillListSection,
-  SkillListItem,
-  StatusMessage,
-  ToggleSwitch,
-  toggleableTargetIds,
-  toggleableTargets,
-  WorkspacePanel,
-  type ImportState,
-  type TargetActionState,
-} from "./components/skill-ui";
+import { AddView, type AddRequest } from "./components/AddView";
+import { DetailView } from "./components/DetailView";
+import { EditView, type EditChanges } from "./components/EditView";
+import { GithubView } from "./components/GithubView";
+import { MainView, type ScanState, type Tab } from "./components/MainView";
+import { SettingsView } from "./components/SettingsView";
+import { SyncView } from "./components/SyncView";
+import { ToolSwitcher } from "./components/ToolSwitcher";
+import { NoticeBar, PageHeader, type Notice } from "./components/ui";
+import { WindowControls } from "./components/WindowControls";
 import { demoSkills } from "./data/demoSkills";
-import { useLocale, type TFunction } from "./i18n/useLocale";
+import { useLocale } from "./i18n/useLocale";
+import { compatAsk, compatWarning } from "./lib/compat";
+import {
+  api,
+  errorText,
+  isBridgeUnavailable,
+  type AppStatus,
+  type GithubAccount,
+  type GithubCatalog,
+  type SkillUpdateStatus,
+} from "./lib/api";
 import {
   filterSkills,
-  getSkillStats,
-  getSkillUsageLabels,
-  groupSkillsIntoSections,
-  isImportableSkill,
-  mergeSameNamedSkills,
-  type SkillOriginKind,
+  folderName,
+  githubSource,
+  partitionSkills,
+  showInstalledTools,
+  tools,
   type SkillRecord,
+  type ToolId,
 } from "./lib/skills";
-import type { MessageKey } from "./i18n/messages";
 
-type SectionId = "skills" | "import" | "packages" | "settings";
-type OriginFilterId = "all" | SkillOriginKind;
-
-const originFilters = [
-  { id: "all", key: "filters.all", icon: LayoutGrid },
-  { id: "collection", key: "filters.collection", icon: originIcons.collection },
-  { id: "plugin", key: "filters.plugin", icon: originIcons.plugin },
-  { id: "standalone", key: "filters.standalone", icon: originIcons.standalone },
-  { id: "system", key: "filters.system", icon: originIcons.system },
-] satisfies Array<{ id: OriginFilterId; key: MessageKey; icon: typeof Boxes }>;
-
-const originSectionLabelKeys: Record<SkillOriginKind, MessageKey> = {
-  standalone: "sections.standalone",
-  collection: "sections.collection",
-  plugin: "sections.plugin",
-  system: "sections.system",
-};
-
-const sections = [
-  { id: "skills", key: "nav.skills", icon: LayoutGrid },
-  { id: "import", key: "nav.imported", icon: ToggleRight },
-  { id: "packages", key: "nav.packages", icon: ArrowRightLeft },
-  { id: "settings", key: "nav.settings", icon: Settings },
-] satisfies Array<{ id: SectionId; key: MessageKey; icon: typeof Boxes }>;
-
-type ScanState = "scanning" | "ready" | "preview" | "error";
-
-type ImportResult = {
-  imported: boolean;
-  alreadyManaged: boolean;
-  skillName: string;
-  libraryPath: string;
-  message: string;
-};
-
-type TargetToggleResult = {
-  targetId: string;
-  targetName: string;
-  skillName: string;
-  enabled: boolean;
-  changed: boolean;
-  targetPath: string;
-  message: string;
-};
-
-type UpdateState =
-  | "up-to-date"
-  | "update-available"
-  | "source-unavailable"
-  | "rate-limited"
-  | "error";
-
-type SkillUpdateStatus = {
-  libraryPath: string;
-  skillName: string;
-  state: UpdateState;
-  hasUpdate: boolean;
-  current: string;
-  latest: string;
-  url: string;
-  message: string;
-};
-
-function isTauriBridgeUnavailable(error: unknown) {
-  const message = (error instanceof Error ? error.message : String(error ?? "")).toLowerCase();
-
-  return message.includes("invoke") || message.includes("tauri") || message.includes("internals");
-}
-
-function describeImportError(error: unknown, t: TFunction) {
-  return isTauriBridgeUnavailable(error) ? t("errors.bridgeAction") : t("errors.importFallback");
-}
-
-function describeTargetError(error: unknown, t: TFunction, targetName: string) {
-  if (isTauriBridgeUnavailable(error)) {
-    return t("errors.bridgeAction");
-  }
-
-  const raw = (error instanceof Error ? error.message : String(error ?? "")).toLowerCase();
-  if (raw.includes("not managed")) {
-    return t("errors.targetConflict");
-  }
-
-  return t("errors.targetFallback", { targetName });
-}
-
-// Tauri rejects a command with the backend's `Err(String)` value directly, so
-// surface that actionable message (rate limit, "not found", "no SKILL.md", …).
-function describeBackendError(error: unknown) {
-  if (typeof error === "string") {
-    return error;
-  }
-  return error instanceof Error ? error.message : String(error ?? "");
-}
-
-function updateStateLabel(state: UpdateState, t: TFunction) {
-  switch (state) {
-    case "update-available":
-      return t("updates.available");
-    case "up-to-date":
-      return t("updates.upToDate");
-    case "source-unavailable":
-      return t("updates.unavailable");
-    case "rate-limited":
-      return t("updates.rateLimited");
-    default:
-      return t("updates.error");
-  }
-}
+type View =
+  | { name: "main" }
+  | { name: "edit"; path: string }
+  | { name: "detail"; path: string }
+  | { name: "add" }
+  | { name: "sync" }
+  | { name: "github" }
+  | { name: "settings" };
 
 function App() {
   const { locale, setLocale, t } = useLocale();
-  const [activeSection, setActiveSection] = useState<SectionId>("skills");
-  const [query, setQuery] = useState("");
-  const [originFilter, setOriginFilter] = useState<OriginFilterId>("all");
   const [skills, setSkills] = useState<SkillRecord[]>([]);
-  const [selectedId, setSelectedId] = useState("");
-  const [expandedSourceGroups, setExpandedSourceGroups] = useState<Set<string>>(new Set());
-  const [detailOpen, setDetailOpen] = useState(false);
   const [scanState, setScanState] = useState<ScanState>("scanning");
-  const [importState, setImportState] = useState<ImportState>("idle");
-  const [importMessage, setImportMessage] = useState("");
-  const [targetActionState, setTargetActionState] = useState<TargetActionState>("idle");
-  const [targetActionMessage, setTargetActionMessage] = useState("");
-  const [savingKey, setSavingKey] = useState("");
-  const [utilityMessage, setUtilityMessage] = useState("");
-  const [utilityState, setUtilityState] = useState<"success" | "error">("success");
-  const [githubUrl, setGithubUrl] = useState("");
-  const [githubBusy, setGithubBusy] = useState(false);
-  const [updateStatuses, setUpdateStatuses] = useState<SkillUpdateStatus[]>([]);
-  const [checkedUpdates, setCheckedUpdates] = useState(false);
-  const [checkingUpdates, setCheckingUpdates] = useState(false);
-  const [selectedUpdates, setSelectedUpdates] = useState<Set<string>>(new Set());
-  const [updatingSkills, setUpdatingSkills] = useState(false);
-  const backButtonRef = useRef<HTMLButtonElement>(null);
-  const skillListRef = useRef<HTMLElement>(null);
-  const pendingFocusRef = useRef<"detail" | "list" | null>(null);
-  const visibleSkills = skills.length > 0 ? skills : demoSkills;
-  const groupedSkills = useMemo(() => mergeSameNamedSkills(visibleSkills), [visibleSkills]);
-  const allImportCandidates = useMemo(
-    () =>
-      mergeSameNamedSkills(skills).filter(
-        (skill) => isImportableSkill(skill) && !hasSource(skill, "Shared Library"),
-      ),
-    [skills],
-  );
-  const usingFallback = scanState === "ready" && skills.length === 0;
-  const filteredSkills = useMemo(() => filterSkills(groupedSkills, query), [groupedSkills, query]);
-  const categorySkills = useMemo(
-    () =>
-      originFilter === "all"
-        ? filteredSkills
-        : filteredSkills.filter((skill) => skill.origin.kind === originFilter),
-    [filteredSkills, originFilter],
-  );
-  const skillListSections = useMemo(() => groupSkillsIntoSections(categorySkills), [categorySkills]);
-  const originCounts = useMemo(
-    () =>
-      groupedSkills.reduce<Record<SkillOriginKind, number>>(
-        (counts, skill) => {
-          counts[skill.origin.kind] += 1;
-          return counts;
-        },
-        { standalone: 0, collection: 0, plugin: 0, system: 0 },
-      ),
-    [groupedSkills],
-  );
-  const selectedSkill = categorySkills.find((skill) => skill.id === selectedId) ?? categorySkills[0];
-  const importedSkills = filteredSkills.filter((skill) => hasSource(skill, "Shared Library"));
-  const stats = useMemo(() => getSkillStats(groupedSkills), [groupedSkills]);
-  const importDisabled =
-    !selectedSkill ||
-    !isImportableSkill(selectedSkill) ||
-    hasSource(selectedSkill, "Shared Library") ||
-    scanState === "scanning" ||
-    importState === "importing" ||
-    targetActionState === "saving";
-  const importAllDisabled =
-    scanState !== "ready" ||
-    importState === "importing" ||
-    targetActionState === "saving" ||
-    allImportCandidates.length === 0;
-  const targetToggleLocked = scanState === "scanning" || importState === "importing" || targetActionState === "saving";
-  const statusMessage = activeSection === "skills" && !detailOpen && importMessage ? importMessage : "";
-  const scanStatusIsError = scanState === "error" || (Boolean(statusMessage) && importState === "error");
-  const compactSummary = t("status.readyCompact", {
-    total: stats.total,
-    healthy: stats.healthy,
-    warnings: stats.warnings,
-  });
+  const [view, setView] = useState<View>({ name: "main" });
+  const [tab, setTab] = useState<Tab>("all");
+  const [query, setQuery] = useState("");
+  const [notice, setNotice] = useState<Notice>(null);
+  const [busyKey, setBusyKey] = useState<string | null>(null);
+  const [adding, setAdding] = useState(false);
+  const [updates, setUpdates] = useState<SkillUpdateStatus[] | null>(null);
+  const [checkedAt, setCheckedAt] = useState<Date | null>(null);
+  const [checking, setChecking] = useState(false);
+  const [updatingPath, setUpdatingPath] = useState<string | null>(null);
+  const [appStatus, setAppStatus] = useState<AppStatus | null>(null);
+  const [saving, setSaving] = useState(false);
+  // Bumped when the user changes which tools are shown (tools is a live binding).
+  const [, setToolsVersion] = useState(0);
+  const [account, setAccount] = useState<GithubAccount | null>(null);
+  const [catalog, setCatalog] = useState<GithubCatalog | null>(null);
+  const [catalogLoading, setCatalogLoading] = useState(false);
+  const starred = useMemo(() => new Set((catalog?.starred ?? []).map((name) => name.toLowerCase())), [catalog]);
+  // Each scan gets an id so a slower, older scan can't overwrite a newer one.
+  const scanRequest = useRef(0);
 
-  async function loadSkills({
-    keepDetailOpen = false,
-    preserveImportMessage = false,
-  }: { keepDetailOpen?: boolean; preserveImportMessage?: boolean } = {}) {
+  // Sample records only for the browser preview (no Tauri backend).
+  const records = scanState === "preview" ? demoSkills : skills;
+  const { library, locals } = useMemo(() => partitionSkills(records), [records]);
+  const visibleLibrary = useMemo(() => filterSkills(library, query), [library, query]);
+  const visibleLocals = useMemo(() => filterSkills(locals, query), [locals, query]);
+  const updateMap = useMemo(
+    () => new Map((updates ?? []).map((status) => [status.libraryPath, status])),
+    [updates],
+  );
+  const pendingUpdates = (updates ?? []).filter((status) => status.hasUpdate).length;
+  // The sample records live under C:/Users/demo, so show them as ~/… too.
+  const home = scanState === "preview" ? "C:/Users/demo" : appStatus?.homeDir ?? null;
+
+  function describeError(error: unknown) {
+    return isBridgeUnavailable(error) ? t("errors.bridge") : t("notice.failed", { reason: errorText(error) });
+  }
+
+  function go(next: View) {
+    setNotice(null);
+    setView(next);
+  }
+
+  async function loadSkills() {
+    const requestId = ++scanRequest.current;
     setScanState("scanning");
-    if (!preserveImportMessage) {
-      setImportMessage("");
-      setImportState("idle");
-    }
-    if (!keepDetailOpen) {
-      setDetailOpen(false);
-    }
-
     try {
-      const scannedSkills = await invoke<SkillRecord[]>("scan_skills");
-      const nextSkills = mergeSameNamedSkills(scannedSkills);
-      setSkills(scannedSkills);
-      setSelectedId((currentId) =>
-        keepDetailOpen && nextSkills.some((skill) => skill.id === currentId)
-          ? currentId
-          : nextSkills[0]?.id ?? demoSkills[0]?.id ?? "",
-      );
+      const scanned = await api.scanSkills();
+      if (requestId !== scanRequest.current) {
+        return;
+      }
+      setSkills(scanned);
       setScanState("ready");
     } catch (error) {
+      if (requestId !== scanRequest.current) {
+        return;
+      }
       console.error("scan_skills failed", error);
       setSkills([]);
-      setSelectedId(demoSkills[0]?.id ?? "");
-      setScanState(isTauriBridgeUnavailable(error) ? "preview" : "error");
+      setScanState(isBridgeUnavailable(error) ? "preview" : "error");
     }
   }
 
-  async function toggleSkillTarget(
-    skill: SkillRecord | undefined,
-    target: { id: string; name: string; enabled: boolean },
-  ) {
-    if (!skill || !hasSource(skill, "Shared Library") || !toggleableTargetIds.has(target.id)) {
+  useEffect(() => {
+    void loadSkills();
+    api
+      .appStatus()
+      .then((status) => {
+        showInstalledTools(status.installedTools ?? []);
+        setAppStatus(status);
+      })
+      .catch((error) => console.error("get_app_status failed", error));
+    // The cached list needs no network; the account check asks GitHub once.
+    api
+      .githubCatalog(false)
+      .then(setCatalog)
+      .catch((error) => console.error("github_catalog failed", error));
+    api
+      .githubAccount()
+      .then(setAccount)
+      .catch((error) => console.error("github_account failed", error));
+
+    // Pick up skills added or removed outside the app when the window comes
+    // back into focus (replaces a manual rescan button).
+    const onFocus = () => void loadSkills();
+    window.addEventListener("focus", onFocus);
+    return () => window.removeEventListener("focus", onFocus);
+  }, []);
+
+  function toolName(toolId: ToolId) {
+    return tools.find((item) => item.id === toolId)?.name ?? toolId;
+  }
+
+  /**
+   * A tool has its own, different copy of a library skill. When the skill's
+   * GitHub repository is known, recommend fetching the latest version there
+   * (instead of pushing an old library copy); always ask before replacing.
+   */
+  function askToReplace(skill: SkillRecord, toolId: ToolId) {
+    const repo = githubSource(skill);
+    const replace = { label: t("actions.replaceWithLibrary"), run: () => void replaceInTool(skill, toolId) };
+    setNotice(
+      repo
+        ? {
+            kind: "warning",
+            text: t("notice.conflictAskGithub", {
+              skill: skill.name,
+              tool: toolName(toolId),
+              repo: repo.replace(/^https?:\/\/(www\.)?github\.com\//, ""),
+            }),
+            actions: [{ label: t("actions.updateLatestAndSync"), run: () => void updateLatestAndSync(skill, toolId) }, replace],
+          }
+        : { kind: "warning", text: t("notice.conflictAsk", { skill: skill.name, tool: toolName(toolId) }), actions: [replace] },
+    );
+  }
+
+  async function updateLatestAndSync(skill: SkillRecord, toolId: ToolId) {
+    setBusyKey(`${skill.sourcePath}:${toolId}`);
+    setNotice({ kind: "success", text: t("updates.updating") });
+    try {
+      await api.updateSkill(skill.sourcePath);
+      await api.setTarget(skill.sourcePath, toolId, true, true);
+      setUpdates((current) => current?.filter((status) => status.libraryPath !== skill.sourcePath) ?? null);
+      setNotice({ kind: "success", text: t("notice.updatedAndSynced", { skill: skill.name, tool: toolName(toolId) }) });
+    } catch (error) {
+      console.error("update and sync failed", error);
+      setNotice({ kind: "error", text: describeError(error) });
+    } finally {
+      setBusyKey(null);
+    }
+    await loadSkills();
+  }
+
+  async function replaceInTool(skill: SkillRecord, toolId: ToolId) {
+    setBusyKey(`${skill.sourcePath}:${toolId}`);
+    setNotice(null);
+    try {
+      await api.setTarget(skill.sourcePath, toolId, true, true);
+      setNotice({ kind: "success", text: t("notice.replaced", { skill: skill.name, tool: toolName(toolId) }) });
+    } catch (error) {
+      console.error("replace in tool failed", error);
+      setNotice({ kind: "error", text: describeError(error) });
+    } finally {
+      setBusyKey(null);
+    }
+    await loadSkills();
+  }
+
+  /**
+   * Enabling a skill in a tool it may not suit asks first (never blocks);
+   * a tool the user marked as working for this skill does not.
+   */
+  async function toggleTarget(skill: SkillRecord, toolId: ToolId, enable: boolean) {
+    const warning = enable ? compatWarning(skill, toolId) : null;
+    if (warning) {
+      setNotice({
+        kind: "warning",
+        text: compatAsk(t, skill, toolName(toolId), warning),
+        actions: [
+          { label: t("compat.enableAnyway"), run: () => void applyToggle(skill, toolId, true) },
+          { label: t("compat.viewDetails"), run: () => showDetail(skill) },
+        ],
+      });
       return;
     }
+    await applyToggle(skill, toolId, enable);
+  }
 
-    const nextEnabled = !target.enabled;
-    setTargetActionState("saving");
-    setSavingKey(`${skill.id}::${target.id}`);
-    setTargetActionMessage(
-      t(nextEnabled ? "actions.enablingSkillForTarget" : "actions.disablingSkillForTarget", {
-        skillName: skill.name,
-        targetName: target.name,
-      }),
-    );
+  function showDetail(skill: SkillRecord) {
+    setNotice(null);
+    go({ name: "detail", path: skill.sourcePath });
+  }
 
+  async function applyToggle(skill: SkillRecord, toolId: ToolId, enable: boolean) {
+    setBusyKey(`${skill.sourcePath}:${toolId}`);
+    setNotice(null);
     try {
-      const result = await invoke<TargetToggleResult>("set_skill_target_enabled", {
-        sourcePath: skill.sourcePath,
-        targetId: target.id,
-        enabled: nextEnabled,
+      const result = await api.setTarget(skill.sourcePath, toolId, enable);
+      const names = { skill: skill.name, tool: toolName(toolId) };
+      setNotice({
+        kind: "success",
+        text:
+          enable && result?.variant
+            ? t("notice.enabledVariant", { ...names, path: result.variant })
+            : t(enable ? "notice.enabled" : "notice.disabled", names),
       });
-      setTargetActionState("success");
-      setTargetActionMessage(
-        t(result.enabled ? "actions.enabledSkillForTarget" : "actions.disabledSkillForTarget", {
-          skillName: result.skillName,
-          targetName: result.targetName,
-        }),
-      );
-      await loadSkills({ keepDetailOpen: detailOpen, preserveImportMessage: true });
     } catch (error) {
       console.error("set_skill_target_enabled failed", error);
-      setTargetActionState("error");
-      setTargetActionMessage(describeTargetError(error, t, target.name));
+      if (enable && errorText(error).includes("different content")) {
+        askToReplace(skill, toolId);
+      } else {
+        setNotice({
+          kind: "error",
+          text: errorText(error).includes("not managed")
+            ? t("notice.targetConflict", { tool: toolName(toolId) })
+            : describeError(error),
+        });
+      }
     } finally {
-      setSavingKey("");
+      setBusyKey(null);
     }
+    await loadSkills();
   }
 
-  async function bulkSetTarget(targetId: string, targetName: string, enabled: boolean) {
-    if (!toggleableTargetIds.has(targetId) || targetToggleLocked) {
-      return;
-    }
-
-    const candidates = importedSkills.filter((skill) => {
-      const target = skill.targets.find((entry) => entry.id === targetId);
-      return target !== undefined && hasSource(skill, "Shared Library") && target.enabled !== enabled;
-    });
-
-    if (candidates.length === 0) {
-      setTargetActionState("success");
-      setTargetActionMessage(t("actions.bulkTargetNoChange", { targetName }));
-      return;
-    }
-
-    setTargetActionState("saving");
-    setSavingKey(`bulk::${targetId}::${enabled ? "on" : "off"}`);
-    setTargetActionMessage(
-      t(enabled ? "actions.enablingAllForTarget" : "actions.disablingAllForTarget", { targetName }),
-    );
-
+  async function addLocalToLibrary(skill: SkillRecord) {
+    setBusyKey(`add:${skill.sourcePath}`);
+    setNotice(null);
     try {
-      const result = await invoke<{ succeeded: number; failed: number }>("set_skill_targets_bulk", {
-        sourcePaths: candidates.map((skill) => skill.sourcePath),
-        targetId,
-        enabled,
-      });
-      const { succeeded, failed } = result;
-      setTargetActionState(failed > 0 ? "error" : "success");
-      setTargetActionMessage(
-        failed > 0
-          ? t(enabled ? "actions.enabledAllForTargetPartial" : "actions.disabledAllForTargetPartial", {
-              count: succeeded,
-              failed,
-              targetName,
-            })
-          : t(enabled ? "actions.enabledAllForTarget" : "actions.disabledAllForTarget", {
-              count: succeeded,
-              targetName,
-            }),
-      );
-    } catch (error) {
-      console.error("set_skill_targets_bulk failed", error);
-      setTargetActionState("error");
-      setTargetActionMessage(describeTargetError(error, t, targetName));
-    } finally {
-      setSavingKey("");
-    }
-
-    await loadSkills({ keepDetailOpen: detailOpen, preserveImportMessage: true });
-  }
-
-  async function importSkillToLibrary(skill: SkillRecord) {
-    return invoke<ImportResult>("import_skill_to_library", {
-      sourcePath: skill.sourcePath,
-    });
-  }
-
-  async function importSkill(skill: SkillRecord | undefined) {
-    if (
-      !skill ||
-      !isImportableSkill(skill) ||
-      hasSource(skill, "Shared Library") ||
-      scanState === "scanning" ||
-      importState === "importing"
-    ) {
-      return;
-    }
-
-    setImportState("importing");
-    setUtilityMessage("");
-    setImportMessage(t("actions.importingSkill", { skillName: skill.name }));
-
-    try {
-      const result = await importSkillToLibrary(skill);
-      setImportState("success");
-      setImportMessage(
-        result.imported
-          ? t("actions.importedSkill", { skillName: result.skillName })
-          : result.alreadyManaged
-            ? t("actions.skillAlreadyManaged", { skillName: result.skillName })
-            : result.message || t("actions.skillAlreadyManaged", { skillName: result.skillName }),
-      );
-      await loadSkills({ keepDetailOpen: true, preserveImportMessage: true });
+      const result = await api.importSkill(skill.sourcePath);
+      setNotice({ kind: "success", text: t("notice.added", { skill: result.skillName }) });
     } catch (error) {
       console.error("import_skill_to_library failed", error);
-      setImportState("error");
-      setImportMessage(describeImportError(error, t));
+      setNotice({ kind: "error", text: describeError(error) });
+    } finally {
+      setBusyKey(null);
     }
+    await loadSkills();
   }
 
-  async function importSelectedSkill() {
-    await importSkill(selectedSkill);
-  }
-
-  async function importAllSkills() {
-    if (importAllDisabled) {
-      if (allImportCandidates.length === 0 && scanState === "ready") {
-        setImportState("success");
-        setImportMessage(t("actions.importAllEmpty"));
-      }
-      return;
-    }
-
-    const candidates = allImportCandidates;
-    setDetailOpen(false);
-    setImportState("importing");
-    setUtilityMessage("");
-    setTargetActionMessage("");
-
-    let completedCount = 0;
-    let lastError: unknown = null;
-
-    for (const [index, skill] of candidates.entries()) {
-      setImportMessage(
-        t("actions.importingAllSkills", {
-          current: index + 1,
-          total: candidates.length,
-          skillName: skill.name,
-        }),
+  /** Group installed skills under a GitHub repository. Resolves true on success. */
+  async function linkSeries(url: string): Promise<boolean> {
+    setBusyKey("series:link");
+    setNotice(null);
+    try {
+      const result = await api.linkSeries(url);
+      const values = { repo: result.repository, count: result.matched.length, total: result.skillCount };
+      setNotice(
+        result.matched.length > 0
+          ? { kind: "success", text: t("series.linked", values) }
+          : { kind: "warning", text: t("series.linkedNone", values) },
       );
+      return true;
+    } catch (error) {
+      console.error("link_github_series failed", error);
+      setNotice({ kind: "error", text: describeError(error) });
+      return false;
+    } finally {
+      setBusyKey(null);
+      await loadSkills();
+    }
+  }
 
+  /** Look up unknown skill sources on GitHub. Resolves true when it ran. */
+  async function findSources(): Promise<boolean> {
+    setBusyKey("series:find");
+    setNotice(null);
+    try {
+      const result = await api.findSources();
+      const unknown = [...result.ambiguous, ...result.unmatched];
+      const parts = [
+        result.found.length > 0
+          ? t("series.found", {
+              count: result.found.length,
+              repos: new Set(result.found.map((item) => item.repository)).size,
+            })
+          : t("series.foundNone"),
+      ];
+      if (unknown.length > 0) {
+        const names = unknown.slice(0, 5).join(locale === "zh-CN" ? "、" : ", ");
+        parts.push(t("series.stillUnknown", { count: unknown.length, names: unknown.length > 5 ? `${names} …` : names }));
+      }
+      if (result.rateLimited) {
+        parts.push(t("series.rateLimited"));
+      }
+      if (result.failed.length > 0) {
+        parts.push(t("series.failedRepos", { repos: result.failed.join(", ") }));
+      }
+      const clean = result.found.length > 0 && !result.rateLimited && result.failed.length === 0;
+      setNotice({ kind: clean ? "success" : "warning", text: parts.join(locale === "zh-CN" ? "；" : ". ") });
+      return true;
+    } catch (error) {
+      console.error("find_skill_sources failed", error);
+      setNotice({ kind: "error", text: describeError(error) });
+      return false;
+    } finally {
+      setBusyKey(null);
+      await loadSkills();
+    }
+  }
+
+  /** Read the connected account's repositories and stars again. */
+  async function refreshCatalog() {
+    setCatalogLoading(true);
+    try {
+      const fresh = await api.githubCatalog(true);
+      setCatalog(fresh);
+      if (fresh?.rateLimited) {
+        setNotice({ kind: "warning", text: t("mine.partialNotice") });
+      }
+    } catch (error) {
+      console.error("github_catalog refresh failed", error);
+      setNotice({ kind: "error", text: describeError(error) });
+    } finally {
+      setCatalogLoading(false);
+    }
+  }
+
+  /** Show the account's repositories, reading them first if never read. */
+  function openGithub() {
+    go({ name: "github" });
+    // Lists cached by an older version only held repositories with skills.
+    if (account?.login && !catalogLoading && (!catalog || catalog.avatarUrl === undefined)) {
+      void refreshCatalog();
+    }
+  }
+
+  async function connectGithub(token?: string): Promise<boolean> {
+    setBusyKey("github:connect");
+    setNotice(null);
+    try {
+      const connected = token === undefined ? await api.connectGithubCli() : await api.connectGithubToken(token);
+      setAccount(connected);
+      setNotice({ kind: "success", text: t("account.connected", { login: connected.login ?? "" }) });
+      void api.appStatus().then(setAppStatus).catch(() => undefined);
+      void refreshCatalog();
+      return true;
+    } catch (error) {
+      console.error("connect github failed", error);
+      setNotice({ kind: "error", text: describeError(error) });
+      return false;
+    } finally {
+      setBusyKey(null);
+    }
+  }
+
+  async function disconnectGithub() {
+    setBusyKey("github:disconnect");
+    setNotice(null);
+    try {
+      await api.disconnectGithub();
+      setAccount(await api.githubAccount().catch(() => null));
+      setCatalog(null);
+      setNotice({ kind: "success", text: t("account.disconnected") });
+      void api.appStatus().then(setAppStatus).catch(() => undefined);
+    } catch (error) {
+      setNotice({ kind: "error", text: describeError(error) });
+    } finally {
+      setBusyKey(null);
+    }
+  }
+
+  /** Add tool-folder skills to the shared library (one copy per folder name). */
+  async function addAllToLibrary(skills: SkillRecord[]) {
+    setBusyKey("locals:add-all");
+    setNotice(null);
+    const seen = new Set<string>();
+    let added = 0;
+    let lastError: unknown = null;
+    for (const skill of skills) {
+      const folder = folderName(skill.sourcePath).toLowerCase();
+      if (seen.has(folder)) {
+        continue;
+      }
+      seen.add(folder);
       try {
-        const result = await importSkillToLibrary(skill);
-
-        if (result.imported || result.alreadyManaged) {
-          completedCount += 1;
-        }
+        await api.importSkill(skill.sourcePath);
+        added += 1;
       } catch (error) {
         console.error("import_skill_to_library failed", error);
         lastError = error;
       }
     }
-
-    const failedCount = candidates.length - completedCount;
-
-    if (completedCount > 0) {
-      setImportState(failedCount > 0 ? "error" : "success");
-      setImportMessage(
-        failedCount > 0
-          ? t("actions.importedAllSkillsPartial", { count: completedCount, failed: failedCount })
-          : t("actions.importedAllSkills", { count: completedCount }),
-      );
-    } else {
-      setImportState("error");
-      setImportMessage(describeImportError(lastError, t));
-    }
-
-    await loadSkills({ preserveImportMessage: true });
-  }
-
-  function selectSection(sectionId: SectionId) {
-    setActiveSection(sectionId);
-    setDetailOpen(false);
-    setUtilityMessage("");
-  }
-
-  function toggleSourceGroup(collectionId: string) {
-    setExpandedSourceGroups((current) => {
-      const next = new Set(current);
-      if (next.has(collectionId)) {
-        next.delete(collectionId);
-      } else {
-        next.add(collectionId);
-      }
-      return next;
-    });
-  }
-
-  function renderSkillListItem(skill: SkillRecord) {
-    return (
-      <SkillListItem
-        key={skill.id}
-        skill={skill}
-        selected={skill.id === selectedId}
-        onSelect={() => openSkillDetail(skill.id)}
-        usageLabels={getSkillUsageLabels(skill)}
-      />
+    setBusyKey(null);
+    const text = t("locals.addedAll", { count: added });
+    setNotice(
+      lastError === null
+        ? { kind: "success", text }
+        : { kind: added > 0 ? "warning" : "error", text: `${text} ${describeError(lastError)}` },
     );
+    await loadSkills();
   }
 
-  function openSkillDetail(skillId: string) {
-    pendingFocusRef.current = "detail";
-    setSelectedId(skillId);
-    setDetailOpen(true);
-    setImportMessage("");
-    setTargetActionMessage("");
-    setUtilityMessage("");
+  async function unlinkSeries(repository: string) {
+    setBusyKey(`series:unlink:${repository}`);
+    setNotice(null);
+    try {
+      await api.unlinkSeries(repository);
+      setNotice({ kind: "success", text: t("series.unlinked", { repo: repository }) });
+    } catch (error) {
+      console.error("unlink_github_series failed", error);
+      setNotice({ kind: "error", text: describeError(error) });
+    } finally {
+      setBusyKey(null);
+    }
+    await loadSkills();
   }
 
-  function closeSkillDetail() {
-    pendingFocusRef.current = "list";
-    setDetailOpen(false);
-    setImportMessage("");
-    setTargetActionMessage("");
-    setUtilityMessage("");
-  }
+  async function runAdd(request: AddRequest) {
+    setAdding(true);
+    setNotice(null);
+    const libraryPaths: string[] = [];
+    let failed = 0;
+    let lastError: unknown = null;
 
-  function showRepairPreview() {
-    if (!selectedSkill) {
-      return;
+    try {
+      if (request.kind === "local") {
+        for (const path of request.paths) {
+          try {
+            libraryPaths.push((await api.importSkill(path)).libraryPath);
+          } catch (error) {
+            failed += 1;
+            lastError = error;
+          }
+        }
+      } else if (request.kind === "github") {
+        libraryPaths.push((await api.importFromGithub(request.url)).libraryPath);
+      } else if (request.kind === "github-many") {
+        const result = await api.importGithubSkills(request.urls);
+        libraryPaths.push(...result.imported.map((item) => item.libraryPath));
+        if (result.failed.length > 0) {
+          failed += result.failed.length;
+          lastError = result.failed[0].error;
+        }
+      } else {
+        libraryPaths.push(...(await api.importSkillpack(request.path)).libraryPaths);
+      }
+    } catch (error) {
+      failed += 1;
+      lastError = error;
     }
 
-    setImportMessage("");
-    setUtilityMessage(t("actions.repairPreview", { skillName: selectedSkill.name }));
-  }
+    // New skills are checked before they are enabled; ones that may not suit
+    // a tool are held back and offered in one question at the end.
+    const held: Array<{ path: string; toolId: ToolId; name: string }> = [];
+    for (const path of libraryPaths) {
+      for (const toolId of request.enableIn) {
+        try {
+          const report = await api.checkCompat(path, toolId).catch(() => null);
+          if (report && report.level !== "compatible" && !report.acknowledged) {
+            held.push({ path, toolId, name: folderName(path) });
+            continue;
+          }
+          await api.setTarget(path, toolId, true);
+        } catch (error) {
+          console.error("enable after add failed", error);
+          failed += 1;
+          lastError = error;
+        }
+      }
+    }
+    setAdding(false);
 
-  async function exportSkills(skills: SkillRecord[], defaultName: string) {
-    if (skills.length === 0) {
-      setImportMessage("");
-      setUtilityState("error");
-      setUtilityMessage(t("actions.exportLibraryEmpty"));
+    if (libraryPaths.length === 0) {
+      setNotice({ kind: "error", text: describeError(lastError) });
       return;
     }
+    go({ name: "main" });
+    if (held.length > 0) {
+      setNotice({
+        kind: "warning",
+        text: t("compat.skippedOnAdd", {
+          added: libraryPaths.length,
+          count: held.length,
+          list: held.map((item) => `${item.name} → ${toolName(item.toolId)}`).join(t("compat.separator")),
+        }),
+        actions: [{ label: t("compat.enableSkipped"), run: () => void enableHeld(held) }],
+      });
+    } else {
+      setNotice({
+        kind: failed > 0 ? "error" : "success",
+        text:
+          failed > 0
+            ? t("add.partial", { count: libraryPaths.length, failed })
+            : t("add.done", { count: libraryPaths.length }),
+      });
+    }
+    await loadSkills();
+  }
 
+  async function enableHeld(held: Array<{ path: string; toolId: ToolId }>) {
+    setNotice(null);
+    let enabled = 0;
+    let lastError: unknown = null;
+    for (const item of held) {
+      try {
+        await api.setTarget(item.path, item.toolId, true);
+        enabled += 1;
+      } catch (error) {
+        console.error("enable held skill failed", error);
+        lastError = error;
+      }
+    }
+    setNotice(
+      lastError === null
+        ? { kind: "success", text: t("compat.enabledSkipped", { count: enabled }) }
+        : { kind: "error", text: describeError(lastError) },
+    );
+    await loadSkills();
+  }
+
+  async function saveEdit(skill: SkillRecord, changes: EditChanges, confirmed = false) {
+    const risky = confirmed ? [] : changes.toggles.filter((toggle) => toggle.enable && compatWarning(skill, toggle.toolId));
+    if (risky.length > 0) {
+      setNotice({
+        kind: "warning",
+        text: t("compat.askSave", {
+          skill: skill.name,
+          tools: risky.map((toggle) => toolName(toggle.toolId)).join(t("compat.separator")),
+        }),
+        actions: [
+          { label: t("compat.saveAnyway"), run: () => void saveEdit(skill, changes, true) },
+          { label: t("compat.viewDetails"), run: () => showDetail(skill) },
+        ],
+      });
+      return;
+    }
+    setSaving(true);
+    setNotice(null);
+    try {
+      if (changes.metadataChanged) {
+        await api.updateMetadata(skill.sourcePath, changes.name, changes.description);
+      }
+      for (const toggle of changes.toggles) {
+        await api.setTarget(skill.sourcePath, toggle.toolId, toggle.enable);
+      }
+      go({ name: "main" });
+      setNotice({ kind: "success", text: t("edit.saved", { skill: changes.name }) });
+    } catch (error) {
+      console.error("saving skill failed", error);
+      const conflicted = changes.toggles.find((toggle) => toggle.enable);
+      if (conflicted && errorText(error).includes("different content")) {
+        askToReplace(skill, conflicted.toolId);
+      } else {
+        setNotice({ kind: "error", text: describeError(error) });
+      }
+    } finally {
+      setSaving(false);
+    }
+    await loadSkills();
+  }
+
+  async function removeFromLibrary(skill: SkillRecord) {
+    setBusyKey(`remove:${skill.sourcePath}`);
+    try {
+      await api.removeFromLibrary(skill.sourcePath);
+      go({ name: "main" });
+      setNotice({ kind: "success", text: t("notice.removed", { skill: skill.name }) });
+    } catch (error) {
+      console.error("remove_skill_from_library failed", error);
+      setNotice({ kind: "error", text: describeError(error) });
+    } finally {
+      setBusyKey(null);
+    }
+    await loadSkills();
+  }
+
+  async function exportSkills(list: SkillRecord[], defaultName: string) {
+    if (list.length === 0) {
+      setNotice({ kind: "error", text: t("export.empty") });
+      return;
+    }
     let destination: string | null = null;
     try {
-      destination = await save({
-        defaultPath: defaultName,
-        filters: [{ name: "Skillpack", extensions: ["skillpack"] }],
-      });
+      destination = await save({ defaultPath: defaultName, filters: [{ name: "Skillpack", extensions: ["skillpack"] }] });
     } catch (error) {
-      console.error("save dialog failed", error);
+      setNotice({ kind: "error", text: describeError(error) });
+      return;
     }
     if (!destination) {
       return;
     }
-
-    setImportMessage("");
-    setUtilityState("success");
-    setUtilityMessage(t("actions.exportingSkillpack"));
     try {
-      const result = await invoke<{ skillCount: number }>("export_skillpack", {
-        sources: skills.map((skill) => ({
+      const result = await api.exportSkillpack(
+        list.map((skill) => ({
           sourcePath: skill.sourcePath,
           name: skill.name,
           targets: skill.targets.map((target) => ({ id: target.id, enabled: target.enabled })),
         })),
         destination,
-      });
-      setUtilityState("success");
-      setUtilityMessage(t("actions.exportedSkillpack", { count: result.skillCount }));
+      );
+      setNotice({ kind: "success", text: t("export.done", { count: result.skillCount }) });
     } catch (error) {
       console.error("export_skillpack failed", error);
-      setUtilityState("error");
-      setUtilityMessage(
-        isTauriBridgeUnavailable(error) ? t("errors.bridgeAction") : t("errors.exportFallback"),
-      );
+      setNotice({ kind: "error", text: describeError(error) });
     }
   }
 
-  function exportSelectedSkill() {
-    if (!selectedSkill) {
-      return;
-    }
-    void exportSkills([selectedSkill], `${selectedSkill.name}.skillpack`);
-  }
-
-  function exportLibrary() {
-    void exportSkills(
-      groupedSkills.filter((skill) => hasSource(skill, "Shared Library")),
-      "skills-library.skillpack",
-    );
-  }
-
-  async function importSkillpack() {
-    let selection: string | string[] | null = null;
+  async function checkUpdates() {
+    setChecking(true);
+    setNotice(null);
     try {
-      selection = await open({
-        multiple: false,
-        filters: [{ name: "Skillpack", extensions: ["skillpack"] }],
-      });
-    } catch (error) {
-      console.error("open dialog failed", error);
-    }
-    const packagePath = Array.isArray(selection) ? selection[0] : selection;
-    if (!packagePath) {
-      return;
-    }
-
-    setImportMessage("");
-    setUtilityState("success");
-    setUtilityMessage(t("actions.importingSkillpack"));
-    try {
-      const result = await invoke<{ imported: number }>("import_skillpack", { packagePath });
-      setUtilityState("success");
-      setUtilityMessage(t("actions.importedSkillpack", { count: result.imported }));
-      await loadSkills();
-    } catch (error) {
-      console.error("import_skillpack failed", error);
-      setUtilityState("error");
-      setUtilityMessage(
-        isTauriBridgeUnavailable(error) ? t("errors.bridgeAction") : t("errors.importPackFallback"),
-      );
-    }
-  }
-
-  async function importFromGithub() {
-    const url = githubUrl.trim();
-    if (!url || githubBusy) {
-      return;
-    }
-
-    setImportMessage("");
-    setUtilityState("success");
-    setUtilityMessage(t("actions.importingGithub"));
-    setGithubBusy(true);
-    try {
-      const result = await invoke<{ skillName: string }>("import_from_github", { url });
-      setUtilityState("success");
-      setUtilityMessage(t("actions.importedGithub", { skillName: result.skillName }));
-      setGithubUrl("");
-      await loadSkills();
-    } catch (error) {
-      console.error("import_from_github failed", error);
-      setUtilityState("error");
-      setUtilityMessage(
-        isTauriBridgeUnavailable(error)
-          ? t("errors.bridgeAction")
-          : t("errors.githubImportFailed", { reason: describeBackendError(error) }),
-      );
-    } finally {
-      setGithubBusy(false);
-    }
-  }
-
-  async function checkForUpdates() {
-    if (checkingUpdates || updatingSkills) {
-      return;
-    }
-    setImportMessage("");
-    setUtilityState("success");
-    setUtilityMessage(t("actions.checkingUpdates"));
-    setCheckingUpdates(true);
-    try {
-      const results = await invoke<SkillUpdateStatus[]>("check_skill_updates");
-      setUpdateStatuses(results);
-      setCheckedUpdates(true);
-      setSelectedUpdates(new Set(results.filter((r) => r.hasUpdate).map((r) => r.libraryPath)));
-      const available = results.filter((r) => r.hasUpdate).length;
-      setUtilityState("success");
-      setUtilityMessage(
-        available > 0 ? t("actions.updatesFound", { count: available }) : t("actions.noUpdates"),
-      );
+      setUpdates(await api.checkUpdates());
+      setCheckedAt(new Date());
     } catch (error) {
       console.error("check_skill_updates failed", error);
-      setUtilityState("error");
-      setUtilityMessage(
-        isTauriBridgeUnavailable(error)
-          ? t("errors.bridgeAction")
-          : t("errors.githubImportFailed", { reason: describeBackendError(error) }),
-      );
+      setNotice({ kind: "error", text: describeError(error) });
     } finally {
-      setCheckingUpdates(false);
+      setChecking(false);
     }
   }
 
-  function toggleUpdateSelected(libraryPath: string) {
-    setSelectedUpdates((prev) => {
-      const next = new Set(prev);
-      if (next.has(libraryPath)) {
-        next.delete(libraryPath);
-      } else {
-        next.add(libraryPath);
-      }
-      return next;
-    });
-  }
-
-  async function updateSelectedSkills() {
-    const pending = updateStatuses.filter(
-      (status) => status.hasUpdate && selectedUpdates.has(status.libraryPath),
-    );
-    if (pending.length === 0 || updatingSkills) {
-      return;
+  async function updateSkill(status: SkillUpdateStatus) {
+    setUpdatingPath(status.libraryPath);
+    setNotice(null);
+    try {
+      await api.updateSkill(status.libraryPath);
+      setUpdates((current) =>
+        (current ?? []).map((item) =>
+          item.libraryPath === status.libraryPath
+            ? { ...item, hasUpdate: false, state: "up-to-date", current: item.latest || item.current }
+            : item,
+        ),
+      );
+      setNotice({ kind: "success", text: t("updates.updated", { skill: status.skillName }) });
+    } catch (error) {
+      console.error("update_skill_from_github failed", error);
+      setNotice({ kind: "error", text: describeError(error) });
+    } finally {
+      setUpdatingPath(null);
     }
-
-    setImportMessage("");
-    setUtilityState("success");
-    setUtilityMessage(t("actions.updatingSkills"));
-    setUpdatingSkills(true);
-    const updated = new Set<string>();
-    let failed = 0;
-    for (const status of pending) {
-      try {
-        await invoke<{ skillName: string }>("update_skill_from_github", {
-          libraryPath: status.libraryPath,
-        });
-        updated.add(status.libraryPath);
-      } catch (error) {
-        console.error("update_skill_from_github failed", error);
-        failed += 1;
-      }
-    }
-    setUpdatingSkills(false);
-    setUpdateStatuses((prev) =>
-      prev.map((status) =>
-        updated.has(status.libraryPath)
-          ? {
-              ...status,
-              hasUpdate: false,
-              state: "up-to-date",
-              current: status.latest || status.current,
-            }
-          : status,
-      ),
-    );
-    setSelectedUpdates(new Set());
-    setUtilityState(failed > 0 ? "error" : "success");
-    setUtilityMessage(
-      failed > 0
-        ? t("actions.updatedSkillsPartial", { count: updated.size, failed })
-        : t("actions.updatedSkills", { count: updated.size }),
-    );
     await loadSkills();
   }
 
-  function showTargetBlocked(target: { id: string; name: string }) {
-    if (!selectedSkill) {
-      return;
+  async function openFolder(path: string) {
+    try {
+      await revealItemInDir(path);
+    } catch (error) {
+      setNotice({ kind: "error", text: describeError(error) });
     }
-
-    setImportMessage("");
-    setUtilityMessage("");
-    setTargetActionState("error");
-    setSavingKey("");
-    setTargetActionMessage(
-      t(hasSource(selectedSkill, "Shared Library") ? "targets.pendingAction" : "targets.importRequiredAction", {
-        skillName: selectedSkill.name,
-        targetName: target.name,
-      }),
-    );
   }
 
-  useEffect(() => {
-    void loadSkills();
-  }, []);
-
-  useEffect(() => {
-    const pending = pendingFocusRef.current;
-    if (!pending) {
-      return;
+  async function openExternal(url: string) {
+    try {
+      await openUrl(url);
+    } catch (error) {
+      setNotice({ kind: "error", text: describeError(error) });
     }
-    pendingFocusRef.current = null;
+  }
 
-    if (pending === "detail") {
-      backButtonRef.current?.focus();
-      return;
-    }
-
-    const list = skillListRef.current;
-    if (!list) {
-      return;
-    }
-    const row = list.querySelector<HTMLElement>(`[data-skill-id="${selectedId}"]`);
-    (row ?? list).focus();
-  }, [detailOpen, selectedId]);
+  const editing = view.name === "edit" ? library.find((skill) => skill.sourcePath === view.path) : undefined;
+  const showing = view.name === "detail" ? records.find((skill) => skill.sourcePath === view.path) : undefined;
+  const backToMain = () => go({ name: "main" });
+  const pageTitle =
+    view.name === "edit"
+      ? t("edit.title", { skill: editing?.name ?? "" })
+      : view.name === "detail"
+        ? (showing?.name ?? "")
+      : view.name === "add"
+        ? t("add.title")
+        : view.name === "sync"
+          ? t("sync.title")
+          : view.name === "github"
+            ? t("mine.title")
+            : t("settings.title");
 
   return (
-    <main className="app-shell">
-      <aside className="app-rail" aria-label={t("regions.appControls")}>
-        <div className="rail-brand" aria-label={t("app.title")}>
-          <Boxes size={20} strokeWidth={1.9} aria-hidden="true" />
-          <span>SM</span>
-        </div>
-
-        <nav className="rail-nav" aria-label={t("regions.primaryNavigation")}>
-          {sections.map((section) => {
-            const Icon = section.icon;
-            const label = t(section.key);
-            const active = activeSection === section.id;
-            return (
-              <button
-                className={`rail-button ${active ? "active" : ""}`}
-                type="button"
-                key={section.key}
-                aria-current={active ? "page" : undefined}
-                aria-label={label}
-                title={label}
-                onClick={() => selectSection(section.id)}
-              >
-                <Icon size={18} strokeWidth={1.8} />
-              </button>
-            );
-          })}
-        </nav>
-
-        <div className="rail-spacer" aria-hidden="true" />
-      </aside>
-
-      <section className="skills-workspace" aria-label={t("regions.skillsLibrary")}>
-        <header className="command-bar">
-          <div className="command-title">
-            <strong>{t("app.title")}</strong>
-            <span>{compactSummary}</span>
+    <main className="app">
+      {view.name === "main" ? (
+        <header className="top-bar" data-tauri-drag-region>
+          <div className="brand" data-tauri-drag-region>
+            <strong data-tauri-drag-region>{t("app.title")}</strong>
+            <button
+              type="button"
+              className="icon-button"
+              aria-label={t("nav.settings")}
+              title={t("nav.settings")}
+              onClick={() => go({ name: "settings" })}
+            >
+              <Settings size={17} strokeWidth={1.8} aria-hidden="true" />
+            </button>
           </div>
 
-          <label className="search-field">
-            <Search size={17} strokeWidth={1.8} aria-hidden="true" />
-            <span className="sr-only">{t("search.label")}</span>
-            <input
-              aria-label={t("search.label")}
-              type="search"
-              placeholder={t("search.placeholder")}
-              value={query}
-              onChange={(event) => {
-                setQuery(event.currentTarget.value);
-                setDetailOpen(false);
-              }}
-            />
-          </label>
-
-          {activeSection === "skills" ? (
-            <button
-              className="bulk-import-action"
-              type="button"
-              disabled={importAllDisabled}
-              onClick={() => void importAllSkills()}
-            >
-              <FolderInput size={17} strokeWidth={1.8} />
-              {importState === "importing" ? t("actions.importing") : t("actions.importAllToLibrary")}
-            </button>
-          ) : (
-            <span aria-hidden="true" />
-          )}
+          <ToolSwitcher t={t} tab={tab} library={library} onChange={setTab} />
 
           <button
-            className="icon-action"
             type="button"
-            aria-label={t("actions.scan")}
-            disabled={scanState === "scanning"}
-            onClick={() => void loadSkills()}
+            className="icon-button framed"
+            aria-label={t("mine.title")}
+            title={t("mine.title")}
+            onClick={openGithub}
           >
-            <RefreshCw size={18} strokeWidth={1.8} />
+            <FolderGit2 size={17} strokeWidth={1.8} aria-hidden="true" />
           </button>
-
-          <LanguageSwitch label={t("language.label")} locale={locale} onLocaleChange={setLocale} />
+          <button
+            type="button"
+            className="icon-button framed"
+            aria-label={pendingUpdates > 0 ? t("nav.syncWithUpdates", { count: pendingUpdates }) : t("nav.sync")}
+            title={t("nav.sync")}
+            onClick={() => go({ name: "sync" })}
+          >
+            <Package size={17} strokeWidth={1.8} aria-hidden="true" />
+            {pendingUpdates > 0 ? <span className="dot" aria-hidden="true" /> : null}
+          </button>
+          <button type="button" className="fab" aria-label={t("nav.add")} title={t("nav.add")} onClick={() => go({ name: "add" })}>
+            <Plus size={18} strokeWidth={2.6} aria-hidden="true" />
+          </button>
         </header>
+      ) : (
+        <PageHeader title={pageTitle} backLabel={t("nav.back")} onBack={backToMain} />
+      )}
 
-        <div className={`scan-status ${scanStatusIsError ? "error" : ""}`} role={scanStatusIsError ? "alert" : "status"}>
-          {statusMessage ? (
-            <span>{statusMessage}</span>
-          ) : scanState === "scanning" ? (
-            <span>{t("status.scan.scanning")}</span>
-          ) : scanState === "error" ? (
-            <span>{t("status.scan.error")}</span>
-          ) : scanState === "preview" ? (
-            <span>{t("status.scan.browserPreview")}</span>
-          ) : usingFallback ? (
-            <span>{t("status.scan.fallback")}</span>
+      <WindowControls t={t} />
+      <NoticeBar notice={notice} />
+
+      <div className="view scroll-surface">
+        {view.name === "main" ? (
+          <MainView
+            t={t}
+            tab={tab}
+            library={library}
+            visibleLibrary={visibleLibrary}
+            locals={visibleLocals}
+            query={query}
+            onQueryChange={setQuery}
+            scanState={scanState}
+            updates={updateMap}
+            busyKey={busyKey}
+            onToggle={(skill, toolId, enable) => void toggleTarget(skill, toolId, enable)}
+            onOpen={(skill) => go({ name: "edit", path: skill.sourcePath })}
+            onShowDetail={(skill) => go({ name: "detail", path: skill.sourcePath })}
+            onOpenFolder={(path) => void openFolder(path)}
+            onOpenUrl={(url) => void openExternal(url)}
+            onAddToLibrary={(skill) => void addLocalToLibrary(skill)}
+            onConflict={askToReplace}
+            onLinkSeries={linkSeries}
+            onFindSources={findSources}
+            starred={starred}
+            onUnlinkSeries={(repository) => void unlinkSeries(repository)}
+            onAddAllToLibrary={(skills) => void addAllToLibrary(skills)}
+            home={home}
+          />
+        ) : null}
+
+        {view.name === "edit" ? (
+          editing ? (
+            <EditView
+              key={editing.sourcePath}
+              t={t}
+              skill={editing}
+              home={home}
+              busy={busyKey !== null}
+              saving={saving}
+              onSave={(skill, changes) => void saveEdit(skill, changes)}
+              onExport={(skill) => void exportSkills([skill], `${skill.name}.skillpack`)}
+              onRemove={(skill) => void removeFromLibrary(skill)}
+              onCancel={backToMain}
+            />
           ) : (
-            <span>{t("status.scan.ready")}</span>
-          )}
-        </div>
-
-        {activeSection === "skills" ? (
-          detailOpen && selectedSkill ? (
-            <section className="skill-detail-view" aria-label={t("regions.skillDetail")}>
-              <div className="detail-view-toolbar">
-                <button
-                  className="back-action"
-                  type="button"
-                  ref={backButtonRef}
-                  aria-label={t("actions.backToSkills")}
-                  onClick={closeSkillDetail}
-                >
-                  <ArrowLeft size={17} strokeWidth={1.9} />
-                  {t("actions.backToSkills")}
-                </button>
-              </div>
-              <SkillDetail
-                skill={selectedSkill}
-                importDisabled={importDisabled}
-                importMessage={importMessage}
-                importState={importState}
-                onExport={exportSelectedSkill}
-                onImport={() => void importSelectedSkill()}
-                onRepair={showRepairPreview}
-                onTargetBlocked={showTargetBlocked}
-                onToggleTarget={(target) => void toggleSkillTarget(selectedSkill, target)}
-                targetActionMessage={targetActionMessage}
-                targetActionState={targetActionState}
-                savingKey={savingKey}
-                targetToggleLocked={targetToggleLocked}
-                utilityMessage={utilityMessage}
-                t={t}
-              />
-            </section>
-          ) : (
-            <div className="skill-list-view">
-              <nav className="skill-origin-tabs" aria-label={t("filters.origin")} role="tablist">
-                {originFilters.map((filter) => {
-                  const FilterIcon = filter.icon;
-                  const count = filter.id === "all" ? groupedSkills.length : originCounts[filter.id];
-
-                  return (
-                    <button
-                      className={originFilter === filter.id ? "active" : ""}
-                      type="button"
-                      role="tab"
-                      aria-selected={originFilter === filter.id}
-                      aria-controls="skills-origin-panel"
-                      key={filter.id}
-                      onClick={() => {
-                        setOriginFilter(filter.id);
-                        setDetailOpen(false);
-                      }}
-                    >
-                      <FilterIcon size={15} strokeWidth={1.9} aria-hidden="true" />
-                      <span>{t(filter.key)}</span>
-                      <span className="skill-origin-tab-count">{count}</span>
-                    </button>
-                  );
-                })}
-              </nav>
-
-              <section
-                className="skills-list scroll-surface"
-                id="skills-origin-panel"
-                aria-label={t("regions.discoveredSkills")}
-                ref={skillListRef}
-                tabIndex={-1}
-              >
-                {skillListSections.map((section) => (
-                  <SkillListSection
-                    kind={section.kind}
-                    title={t(originSectionLabelKeys[section.kind])}
-                    summary={
-                      section.kind === "standalone"
-                        ? t("collection.skillCount", { count: section.skillCount })
-                        : t("sections.summary", {
-                            sourceCount: section.sourceCount,
-                            skillCount: section.skillCount,
-                          })
-                    }
-                    key={section.kind}
-                  >
-                    {section.groups.map((group) => {
-                      if (!group.kind || (!group.repository && !group.plugin)) {
-                        return group.skills.map(renderSkillListItem);
-                      }
-
-                      const sourceName = group.repository?.name ?? group.plugin!.name;
-                      const sourceDescription = group.repository
-                        ? group.repository.url ?? t("collection.localSource")
-                        : group.plugin!.repository ??
-                          [group.plugin!.publisher, "v" + group.plugin!.version].join(" · ");
-
-                      return (
-                        <SkillSourceGroup
-                          key={group.id}
-                          name={sourceName}
-                          description={sourceDescription}
-                          kind={group.kind}
-                          skillCount={group.skills.length}
-                          expanded={query.trim().length > 0 || expandedSourceGroups.has(group.id)}
-                          onToggle={() => toggleSourceGroup(group.id)}
-                          t={t}
-                        >
-                          {group.skills.map(renderSkillListItem)}
-                        </SkillSourceGroup>
-                      );
-                    })}
-                  </SkillListSection>
-                ))}
-                {categorySkills.length === 0 ? (
-                  <div className="empty-state">
-                    <p>{t("status.empty.title")}</p>
-                    <span>{t("status.empty.body")}</span>
-                  </div>
-                ) : null}
-              </section>
+            <div className="page-body">
+              <p className="empty-state">{t("edit.missing")}</p>
             </div>
           )
         ) : null}
 
-        {activeSection === "import" ? (
-          <WorkspacePanel
-            icon={ToggleRight}
-            label={t("regions.importWorkspace")}
-            title={t("workspace.import.title")}
-            body={t("workspace.import.body")}
-          >
-            {importedSkills.length > 0 ? (
-              <div className="bulk-target-bar" aria-label={t("workspace.import.bulkActions")}>
-                {toggleableTargets.map((tool) => {
-                  const total = importedSkills.length;
-                  const enabledCount = importedSkills.filter(
-                    (skill) => skill.targets.find((entry) => entry.id === tool.id)?.enabled,
-                  ).length;
-                  return (
-                    <div className="bulk-target-row" key={tool.id}>
-                      <span className="bulk-target-name">{tool.name}</span>
-                      <span className="bulk-target-actions">
-                        <button
-                          type="button"
-                          disabled={targetToggleLocked || total === 0 || enabledCount === total}
-                          aria-label={t("actions.enableAllForTarget", { targetName: tool.name })}
-                          onClick={() => void bulkSetTarget(tool.id, tool.name, true)}
-                        >
-                          {t("actions.enableAll")}
-                        </button>
-                        <button
-                          type="button"
-                          disabled={targetToggleLocked || enabledCount === 0}
-                          aria-label={t("actions.disableAllForTarget", { targetName: tool.name })}
-                          onClick={() => void bulkSetTarget(tool.id, tool.name, false)}
-                        >
-                          {t("actions.disableAll")}
-                        </button>
-                      </span>
-                    </div>
-                  );
-                })}
-              </div>
-            ) : null}
-            <div className="workspace-list">
-              {importedSkills.map((skill) => {
-                const Health = healthIcons[skill.health];
-                return (
-                  <article className="imported-item" key={skill.id}>
-                    <span className="imported-item-main">
-                      <span className={`health-dot ${skill.health}`}>
-                        <Health size={16} strokeWidth={1.9} />
-                      </span>
-                      <span className="imported-item-text">
-                        <strong>{skill.name}</strong>
-                        <small>{skill.description}</small>
-                      </span>
-                    </span>
-                    <span className="imported-item-targets">
-                      {skill.targets.map((target) => {
-                        const toggleable = toggleableTargetIds.has(target.id);
-                        const actionLabel = `${target.enabled ? t("actions.disable") : t("actions.enable")} ${target.name}`;
-                        const busy = targetActionState === "saving" && savingKey === `${skill.id}::${target.id}`;
-                        return (
-                          <span className="target-switch" key={target.id}>
-                            <span className="target-switch-name">{target.name}</span>
-                            {toggleable ? (
-                              <ToggleSwitch
-                                checked={target.enabled}
-                                disabled={targetToggleLocked}
-                                busy={busy}
-                                label={actionLabel}
-                                onToggle={() => void toggleSkillTarget(skill, target)}
-                              />
-                            ) : (
-                              <span className="target-pending">{t("targets.pending")}</span>
-                            )}
-                          </span>
-                        );
-                      })}
-                    </span>
-                  </article>
-                );
-              })}
-              {importedSkills.length === 0 ? (
-                <div className="empty-state">
-                  <p>{t("workspace.import.empty")}</p>
-                  <span>{t("workspace.import.emptyHint")}</span>
-                </div>
-              ) : null}
+        {view.name === "detail" ? (
+          showing ? (
+            <DetailView
+              key={showing.sourcePath}
+              t={t}
+              skill={showing}
+              home={home}
+              busy={busyKey !== null}
+              onOpenUrl={(url) => void openExternal(url)}
+              onOpenFolder={(path) => void openFolder(path)}
+              onEdit={(skill) => go({ name: "edit", path: skill.sourcePath })}
+              onAddToLibrary={(skill) => void addLocalToLibrary(skill)}
+              onCompatChanged={() => void loadSkills()}
+              onVariantsChanged={() => void loadSkills()}
+            />
+          ) : (
+            <div className="page-body">
+              <p className="empty-state">{t("edit.missing")}</p>
             </div>
-            {targetActionMessage ? (
-              <StatusMessage state={targetActionState === "error" ? "error" : "success"} message={targetActionMessage} />
-            ) : null}
-          </WorkspacePanel>
+          )
         ) : null}
 
-        {activeSection === "packages" ? (
-          <WorkspacePanel
-            icon={ArrowRightLeft}
-            label={t("regions.packagesWorkspace")}
-            title={t("workspace.packages.title")}
-            body={t("workspace.packages.body")}
-          >
-            <div className="workspace-actions">
-              <button type="button" onClick={exportLibrary}>
-                <Download size={17} strokeWidth={1.8} />
-                {t("actions.exportSkillpack")}
-              </button>
-              <button type="button" onClick={() => void importSkillpack()}>
-                <FolderInput size={17} strokeWidth={1.8} />
-                {t("nav.import")}
-              </button>
-            </div>
-            <form
-              className="github-import"
-              onSubmit={(event) => {
-                event.preventDefault();
-                void importFromGithub();
-              }}
-            >
-              <label className="github-import-label" htmlFor="github-import-url">
-                {t("workspace.packages.githubLabel")}
-              </label>
-              <div className="github-import-row">
-                <input
-                  id="github-import-url"
-                  type="url"
-                  className="github-import-input"
-                  placeholder="https://github.com/owner/repo/tree/main/skills/foo"
-                  value={githubUrl}
-                  onChange={(event) => setGithubUrl(event.target.value)}
-                  disabled={githubBusy}
-                />
-                <button type="submit" disabled={githubBusy || githubUrl.trim().length === 0}>
-                  <GitBranch size={17} strokeWidth={1.8} />
-                  {t("actions.importFromGithub")}
-                </button>
-              </div>
-              <p className="github-import-hint">{t("workspace.packages.githubHint")}</p>
-            </form>
-            <div className="github-updates">
-              <div className="github-updates-head">
-                <span className="github-import-label">{t("workspace.packages.updatesLabel")}</span>
-                <button
-                  type="button"
-                  onClick={() => void checkForUpdates()}
-                  disabled={checkingUpdates || updatingSkills}
-                >
-                  <RefreshCw size={16} strokeWidth={1.8} />
-                  {t("actions.checkUpdates")}
-                </button>
-              </div>
-              {checkedUpdates && updateStatuses.length === 0 ? (
-                <p className="github-import-hint">{t("workspace.packages.noGithubSkills")}</p>
-              ) : null}
-              {updateStatuses.length > 0 ? (
-                <ul className="github-update-list">
-                  {updateStatuses.map((status) => (
-                    <li key={status.libraryPath} className="github-update-item">
-                      {status.hasUpdate ? (
-                        <label className="github-update-name">
-                          <input
-                            type="checkbox"
-                            checked={selectedUpdates.has(status.libraryPath)}
-                            onChange={() => toggleUpdateSelected(status.libraryPath)}
-                            disabled={updatingSkills}
-                          />
-                          {status.skillName}
-                        </label>
-                      ) : (
-                        <span className="github-update-name">{status.skillName}</span>
-                      )}
-                      <span
-                        className={`github-update-badge github-update-badge-${status.state}`}
-                        title={status.message || undefined}
-                      >
-                        {updateStateLabel(status.state, t)}
-                      </span>
-                    </li>
-                  ))}
-                </ul>
-              ) : null}
-              {updateStatuses.some((status) => status.hasUpdate) ? (
-                <button
-                  type="button"
-                  className="github-update-apply"
-                  onClick={() => void updateSelectedSkills()}
-                  disabled={updatingSkills || selectedUpdates.size === 0}
-                >
-                  <Download size={16} strokeWidth={1.8} />
-                  {t("actions.updateSelected", { count: selectedUpdates.size })}
-                </button>
-              ) : null}
-            </div>
-            {utilityMessage ? <StatusMessage state={utilityState} message={utilityMessage} /> : null}
-          </WorkspacePanel>
+        {view.name === "add" ? (
+          <AddView
+            t={t}
+            library={library}
+            working={adding}
+            onSubmit={(request) => void runAdd(request)}
+            onCancel={backToMain}
+            onError={(message) => setNotice({ kind: "error", text: t("notice.failed", { reason: message }) })}
+            locale={locale}
+            account={account}
+            catalog={catalog}
+            catalogLoading={catalogLoading}
+            onRefreshCatalog={() => void refreshCatalog()}
+            onConnectGithub={() => go({ name: "settings" })}
+            onOpenUrl={(url) => void openExternal(url)}
+          />
         ) : null}
 
-        {activeSection === "settings" ? (
-          <WorkspacePanel
-            icon={Settings}
-            label={t("regions.settingsWorkspace")}
-            title={t("workspace.settings.title")}
-            body={t("workspace.settings.body")}
-          >
-            <dl className="metadata-grid settings-grid" aria-label={t("regions.appStatus")}>
-              <div>
-                <dt>{t("footer.dataRoot")}</dt>
-                <dd>%USERPROFILE%\.skills-manage</dd>
-              </div>
-              <div>
-                <dt>{t("footer.backupMode")}</dt>
-                <dd>{t("workspace.settings.backupValue")}</dd>
-              </div>
-              <div>
-                <dt>{t("footer.packageFormat")}</dt>
-                <dd>.skillpack</dd>
-              </div>
-            </dl>
-          </WorkspacePanel>
+        {view.name === "github" ? (
+          <GithubView
+            t={t}
+            locale={locale}
+            account={account}
+            catalog={catalog}
+            loading={catalogLoading || busyKey === "github:connect"}
+            library={library}
+            working={adding}
+            onRefresh={() => void refreshCatalog()}
+            onConnect={() => void connectGithub()}
+            onOpenUrl={(url) => void openExternal(url)}
+            onSubmit={(request) => void runAdd(request)}
+          />
         ) : null}
-      </section>
+
+        {view.name === "sync" ? (
+          <SyncView
+            t={t}
+            locale={locale}
+            updates={updates}
+            checkedAt={checkedAt}
+            checking={checking}
+            updatingPath={updatingPath}
+            libraryCount={library.length}
+            sources={library.filter((skill) => githubSource(skill))}
+            waiting={locals.filter((skill) => githubSource(skill)).length}
+            onCheck={() => void checkUpdates()}
+            onUpdate={(status) => void updateSkill(status)}
+            onExportAll={() => void exportSkills(library, "skills-library.skillpack")}
+          />
+        ) : null}
+
+        {view.name === "settings" ? (
+          <SettingsView
+            t={t}
+            locale={locale}
+            onLocaleChange={setLocale}
+            appStatus={appStatus}
+            onOpenFolder={(path) => void openFolder(path)}
+            onNotice={setNotice}
+            account={account}
+            catalog={catalog}
+            onOpenGithub={openGithub}
+            busy={busyKey !== null}
+            onConnectGithub={connectGithub}
+            onDisconnectGithub={() => void disconnectGithub()}
+            onToolsChanged={() => {
+              setToolsVersion((version) => version + 1);
+              if (tab !== "all" && !tools.some((tool) => tool.id === tab)) {
+                setTab("all");
+              }
+            }}
+            onOpenUrl={(url) => void openExternal(url)}
+          />
+        ) : null}
+      </div>
     </main>
   );
 }

@@ -36,36 +36,30 @@ function contrastRatio(foreground, background) {
   return (lighter + 0.05) / (darker + 0.05);
 }
 
-describe("App stylesheet accessibility contracts", () => {
-  it("keeps the app as a fixed desktop shell instead of a scrolling page", () => {
+describe("App stylesheet contracts", () => {
+  it("keeps the app as a fixed desktop window with one scrolling content area", () => {
     expect(cssBlock(/body\s*\{([^}]*)\}/s)).toContain("overflow: hidden");
-    expect(cssBlock(/\.app-shell\s*\{([^}]*)\}/s)).toContain("height: 100vh");
-    expect(cssBlock(/\.app-shell\s*\{([^}]*)\}/s)).toContain("overflow: hidden");
-    expect(cssBlock(/\.app-shell\s*\{([^}]*)\}/s)).toContain("grid-template-columns: 64px minmax(0, 1fr)");
-  });
-
-  it("hides scrollbars while keeping internal scroll surfaces wheelable", () => {
+    expect(cssBlock(/\.app\s*\{([^}]*)\}/s)).toContain("height: 100vh");
+    expect(cssBlock(/\.app\s*\{([^}]*)\}/s)).toContain("overflow: hidden");
     expect(cssBlock(/\.scroll-surface\s*\{([^}]*)\}/s)).toContain("overflow-y: auto");
-    expect(cssBlock(/\.scroll-surface\s*\{([^}]*)\}/s)).toContain("scrollbar-width: none");
-    expect(cssBlock(/\.scroll-surface::-webkit-scrollbar\s*\{([^}]*)\}/s)).toContain("display: none");
   });
 
-  it("keeps compact exe controls at touch-safe sizes", () => {
-    expect(cssBlock(/\.rail-button\s*\{([^}]*)\}/s)).toContain("width: 44px");
-    expect(cssBlock(/\.rail-button\s*\{([^}]*)\}/s)).toContain("min-height: 44px");
-    expect(cssBlock(/\.language-switch\s*\{([^}]*)\}/s)).toContain("min-height: 44px");
-    expect(cssBlock(/\.language-switch button\s*\{([^}]*)\}/s)).toContain("min-height: 44px");
-    expect(cssBlock(/\.icon-action\s*\{([^}]*)\}/s)).toContain("width: 44px");
-    expect(cssBlock(/\.icon-action\s*\{([^}]*)\}/s)).toContain("min-height: 44px");
-    expect(cssBlock(/\.bulk-import-action\s*\{([^}]*)\}/s)).toContain("min-height: 44px");
+  it("keeps desktop pointer targets comfortably clickable", () => {
+    expect(appStyles).toContain("--control: 32px");
+    expect(cssBlock(/\.button\s*\{([^}]*)\}/s)).toContain("min-height: var(--control)");
+    expect(cssBlock(/\.switcher-trigger\s*\{([^}]*)\}/s)).toContain("min-height: 38px");
+    expect(cssBlock(/\.switcher-option\s*\{([^}]*)\}/s)).toContain("min-height: 36px");
+    expect(cssBlock(/\.fab\s*\{([^}]*)\}/s)).toContain("width: 36px");
+    expect(cssBlock(/\.back-button\s*\{([^}]*)\}/s)).toContain("width: 34px");
   });
 
-  it("keeps keyboard focus visible for the search field", () => {
-    expect(cssBlock(/\.search-field:focus-within\s*\{([^}]*)\}/s)).toContain("outline:");
-    expect(cssBlock(/\.search-field:focus-within\s*\{([^}]*)\}/s)).toContain("outline-offset:");
+  it("keeps a visible keyboard focus ring and reveals hover actions on focus", () => {
+    expect(cssBlock(/:focus-visible\s*\{([^}]*)\}/s)).toContain("outline: 2px solid var(--accent)");
+    expect(appStyles).toContain(".skill-card:focus-within .hover-actions");
   });
 
-  it("keeps white text readable on the primary accent fill", () => {
+  it("keeps white text readable on the accent and danger fills", () => {
     expect(contrastRatio("#ffffff", customHexProperty("--accent"))).toBeGreaterThanOrEqual(4.5);
+    expect(contrastRatio("#ffffff", customHexProperty("--danger-fill"))).toBeGreaterThanOrEqual(4.5);
   });
 });
