@@ -1,7 +1,9 @@
 use crate::fs_ops::{home_dir, same_skill_content, short_hash, LINK_MARKER_FILE, SOURCE_MARKER_FILE};
 use crate::series::{self, SeriesLinks};
 use crate::targets::{self, is_managed_target_copy};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
+use std::cmp::Ordering;
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -13,6 +15,9 @@ pub struct ScannedSkill {
     pub description: String,
     pub source: String,
     pub source_path: String,
+    /// What kind of thing the skill belongs to (a repository collection, a
+    /// Codex plugin, Codex's own system skills, or nothing: standalone).
+    pub origin: SkillOrigin,
     pub health: SkillHealth,
     pub targets: Vec<TargetState>,
     pub support_files: Vec<String>,
@@ -60,6 +65,106 @@ pub enum SkillHealth {
     Broken,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SkillOrigin {
+    pub kind: SkillOriginKind,
+    pub plugin: Option<PluginIdentity>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub repository: Option<RepositoryIdentity>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SkillOriginKind {
+    Standalone,
+    /// One of several skills from the same repository.
+    Collection,
+    /// Ships inside a Codex plugin; Codex manages it.
+    Plugin,
+    /// Codex's own skills (bundled plugins, `~/.codex/skills/.system`).
+    System,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RepositoryIdentity {
+    pub id: String,
+    pub name: String,
+    pub url: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginIdentity {
+    pub id: String,
+    pub name: String,
+    pub version: String,
+    pub publisher: String,
+    pub repository: Option<String>,
+}
+
+impl SkillOrigin {
+    fn standalone() -> Self {
+        SkillOrigin { kind: SkillOriginKind::Standalone, plugin: None, repository: None }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct PluginManifest {
+    name: String,
+    #[serde(default)]
+    version: String,
+    author: Option<PluginAuthor>,
+    interface: Option<PluginInterface>,
+    repository: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct PluginAuthor {
+    name: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PluginInterface {
+    display_name: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+struct PluginPackage {
+    channel: String,
+    package_root: PathBuf,
+    manifest: PluginManifest,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct MarketplaceManifest {
+    name: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct GithubSourceMetadata {
+    kind: String,
+    owner: String,
+    repo: String,
+}
+
+/// `~/.agents/.skill-lock.json`, written by `npx skills add`.
+#[derive(Debug, Clone, Deserialize)]
+struct SkillLock {
+    #[serde(default)]
+    skills: BTreeMap<String, LockedSkillSource>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct LockedSkillSource {
+    source: String,
+    source_type: String,
+    source_url: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct SkillMetadata {
     name: Option<String>,
@@ -68,7 +173,18 @@ struct SkillMetadata {
 
 pub fn scan_default_skills() -> Vec<ScannedSkill> {
     let roots = candidate_skill_roots();
-    scan_skill_roots_with_links(&roots, &default_target_roots(), &series::load_default_links())
+    let target_roots = default_target_roots();
+    let mut skills = scan_skill_roots_with_links(&roots, &target_roots, &series::load_default_links());
+
+    if let Some(home) = home_dir() {
+        apply_skill_lock_sources(&mut skills, &home.join(".agents").join(".skill-lock.json"));
+        let codex_root = home.join(".codex");
+        skills.extend(scan_repository_collections(&codex_root, &target_roots));
+        skills.extend(scan_plugin_cache(&codex_root.join("plugins").join("cache"), &target_roots));
+    }
+
+    sort_skills(&mut skills);
+    skills
 }
 
 pub fn candidate_skill_roots() -> Vec<PathBuf> {
@@ -79,6 +195,8 @@ pub fn candidate_skill_roots() -> Vec<PathBuf> {
         for (_, _, folder) in targets::TOOLS {
             roots.push(home.join(folder).join("skills"));
         }
+        // Codex's own skills; a hidden folder, so not found by the root above.
+        roots.push(home.join(".codex").join("skills").join(".system"));
     }
     if let Ok(data_root) = crate::fs_ops::default_data_root() {
         roots.push(data_root.join("library"));
@@ -148,7 +266,7 @@ fn scan_skill_roots_with_links(
         }
     }
 
-    skills.sort_by(|left, right| left.name.to_lowercase().cmp(&right.name.to_lowercase()));
+    sort_skills(&mut skills);
     skills
 }
 
@@ -156,6 +274,20 @@ fn scan_skill_dir(
     root: &Path,
     skill_dir: &Path,
     skill_file: &Path,
+    target_roots: &[(&str, PathBuf)],
+    links: &SeriesLinks,
+) -> Option<ScannedSkill> {
+    let source = source_label(root);
+    let skill_origin = skill_origin_for_path(root, skill_dir);
+    scan_skill_dir_as(skill_dir, skill_file, &source, skill_origin, target_roots, links)
+}
+
+/// Scan one skill folder shown under `source` (a tool's or the library's name).
+fn scan_skill_dir_as(
+    skill_dir: &Path,
+    skill_file: &Path,
+    source: &str,
+    skill_origin: SkillOrigin,
     target_roots: &[(&str, PathBuf)],
     links: &SeriesLinks,
 ) -> Option<ScannedSkill> {
@@ -170,10 +302,11 @@ fn scan_skill_dir(
             id: skill_id(&directory_name, skill_dir),
             name: directory_name,
             description: "SKILL.md could not be read.".to_string(),
-            source: source_label(root),
+            source: source.to_string(),
             source_path: skill_dir.display().to_string(),
+            origin: skill_origin,
             health: SkillHealth::Broken,
-            targets: target_states(root, skill_dir, target_roots),
+            targets: target_states(source, skill_dir, target_roots),
             support_files: support_files(skill_dir),
             managed: is_managed_copy(skill_dir),
             source_url: origin.url,
@@ -212,7 +345,7 @@ fn scan_skill_dir(
         (linked, is_linked)
     };
 
-    let (compat, variants) = if source_label(root) == "Shared Library" {
+    let (compat, variants) = if source == "Shared Library" {
         (crate::compat::library_skill_summaries(skill_dir), crate::variants::list(skill_dir))
     } else {
         (Vec::new(), Vec::new())
@@ -224,10 +357,11 @@ fn scan_skill_dir(
         description: metadata
             .description
             .unwrap_or_else(|| "No description provided.".to_string()),
-        source: source_label(root),
+        source: source.to_string(),
         source_path: skill_dir.display().to_string(),
+        origin: skill_origin,
         health,
-        targets: target_states(root, skill_dir, target_roots),
+        targets: target_states(source, skill_dir, target_roots),
         support_files: support_files(skill_dir),
         managed: is_managed_copy(skill_dir),
         source_url: origin.url,
@@ -239,6 +373,312 @@ fn scan_skill_dir(
         compat,
         variants,
     })
+}
+
+/// Skills installed with `npx skills add` from GitHub belong to that
+/// repository. Tool-folder skills with no known source also get it as their
+/// source, so they group with the rest of the repository.
+fn apply_skill_lock_sources(skills: &mut [ScannedSkill], lock_path: &Path) {
+    let Ok(contents) = fs::read_to_string(lock_path) else {
+        return;
+    };
+    let Ok(lock) = serde_json::from_str::<SkillLock>(&contents) else {
+        return;
+    };
+
+    for skill in skills {
+        if skill.origin.kind != SkillOriginKind::Standalone {
+            continue;
+        }
+        let folder_name = Path::new(&skill.source_path).file_name().and_then(|value| value.to_str());
+        let locked_source = folder_name
+            .and_then(|name| lock.skills.get(name))
+            .or_else(|| lock.skills.get(&skill.name));
+        let Some(repository) = locked_source.and_then(locked_repository_identity) else {
+            continue;
+        };
+
+        if skill.source != "Shared Library" && skill.source_url.is_none() && skill.detected_source_url.is_none() {
+            skill.detected_source_url = repository.url.clone();
+        }
+        skill.origin = SkillOrigin { kind: SkillOriginKind::Collection, plugin: None, repository: Some(repository) };
+    }
+}
+
+fn locked_repository_identity(source: &LockedSkillSource) -> Option<RepositoryIdentity> {
+    if !source.source_type.eq_ignore_ascii_case("github") {
+        return None;
+    }
+
+    let source_name = source.source.trim().trim_matches('/');
+    let mut parts = source_name.rsplit('/');
+    let repo = parts.next()?.trim_end_matches(".git");
+    let owner = parts.next()?;
+    if owner.is_empty() || repo.is_empty() {
+        return None;
+    }
+
+    let source_url = source.source_url.trim().trim_end_matches('/').trim_end_matches(".git");
+
+    Some(RepositoryIdentity {
+        id: format!("github/{}/{}", slug_id(owner), slug_id(repo)),
+        name: format!("{owner}/{repo}"),
+        url: (!source_url.is_empty()).then(|| source_url.to_string()),
+    })
+}
+
+/// Skill packages Codex keeps in `~/.codex/<package>` with a Claude plugin
+/// marketplace manifest: each is a local repository collection.
+fn scan_repository_collections(codex_root: &Path, target_roots: &[(&str, PathBuf)]) -> Vec<ScannedSkill> {
+    let mut skills = Vec::new();
+    let Ok(entries) = fs::read_dir(codex_root) else {
+        return skills;
+    };
+
+    for entry in entries.flatten() {
+        let package_root = entry.path();
+        let manifest_path = package_root.join(".claude-plugin").join("marketplace.json");
+        let skills_root = package_root.join("skills");
+        if !manifest_path.is_file() || !skills_root.is_dir() {
+            continue;
+        }
+        let Ok(contents) = fs::read_to_string(manifest_path) else {
+            continue;
+        };
+        let Ok(manifest) = serde_json::from_str::<MarketplaceManifest>(&contents) else {
+            continue;
+        };
+        if manifest.name.trim().is_empty() {
+            continue;
+        }
+
+        let origin = SkillOrigin {
+            kind: SkillOriginKind::Collection,
+            plugin: None,
+            repository: Some(RepositoryIdentity {
+                id: format!("local/{}", slug_id(&manifest.name)),
+                name: manifest.name,
+                url: None,
+            }),
+        };
+        skills.extend(scan_skills_folder(&skills_root, "Codex", &origin, target_roots));
+    }
+
+    sort_skills(&mut skills);
+    skills
+}
+
+/// Skills inside the Codex plugins in `~/.codex/plugins/cache/<channel>/<plugin>/<version>`,
+/// the latest version of each plugin only.
+fn scan_plugin_cache(cache_root: &Path, target_roots: &[(&str, PathBuf)]) -> Vec<ScannedSkill> {
+    let mut skills = Vec::new();
+
+    for package in latest_plugin_packages(cache_root) {
+        let skills_root = package.package_root.join("skills");
+        if !skills_root.is_dir() {
+            continue;
+        }
+
+        let publisher = package
+            .manifest
+            .author
+            .as_ref()
+            .map(|author| author.name.trim())
+            .filter(|name| !name.is_empty())
+            .unwrap_or("Unknown publisher")
+            .to_string();
+        let plugin_name = package
+            .manifest
+            .interface
+            .as_ref()
+            .and_then(|interface| interface.display_name.as_deref())
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+            .unwrap_or(package.manifest.name.as_str())
+            .to_string();
+        let version = if package.manifest.version.trim().is_empty() {
+            package
+                .package_root
+                .file_name()
+                .and_then(|value| value.to_str())
+                .unwrap_or("unknown")
+                .to_string()
+        } else {
+            package.manifest.version.clone()
+        };
+        let origin = SkillOrigin {
+            kind: plugin_origin_kind(&package.channel),
+            plugin: Some(PluginIdentity {
+                id: format!("{}/{}", slug_id(&publisher), slug_id(&package.manifest.name)),
+                name: plugin_name,
+                version,
+                publisher,
+                repository: package
+                    .manifest
+                    .repository
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|repository| !repository.is_empty())
+                    .map(str::to_string),
+            }),
+            repository: None,
+        };
+        skills.extend(scan_skills_folder(&skills_root, "Codex", &origin, target_roots));
+    }
+
+    sort_skills(&mut skills);
+    skills
+}
+
+/// Every skill folder directly inside `skills_root`, all with the same origin.
+fn scan_skills_folder(
+    skills_root: &Path,
+    source: &str,
+    origin: &SkillOrigin,
+    target_roots: &[(&str, PathBuf)],
+) -> Vec<ScannedSkill> {
+    let Ok(entries) = fs::read_dir(skills_root) else {
+        return Vec::new();
+    };
+    entries
+        .flatten()
+        .filter(|entry| !entry.file_name().to_string_lossy().starts_with('.'))
+        .filter_map(|entry| {
+            let skill_dir = entry.path();
+            let skill_file = skill_dir.join("SKILL.md");
+            if !skill_dir.is_dir() || !skill_file.is_file() {
+                return None;
+            }
+            scan_skill_dir_as(&skill_dir, &skill_file, source, origin.clone(), target_roots, &SeriesLinks::new())
+        })
+        .collect()
+}
+
+fn latest_plugin_packages(cache_root: &Path) -> Vec<PluginPackage> {
+    let mut packages = BTreeMap::<String, PluginPackage>::new();
+    let Ok(channels) = fs::read_dir(cache_root) else {
+        return Vec::new();
+    };
+
+    for channel_entry in channels.flatten() {
+        let channel_root = channel_entry.path();
+        if !channel_root.is_dir() {
+            continue;
+        }
+        let channel = channel_entry.file_name().to_string_lossy().to_string();
+        let Ok(plugin_dirs) = fs::read_dir(&channel_root) else {
+            continue;
+        };
+
+        for plugin_entry in plugin_dirs.flatten() {
+            let Ok(version_dirs) = fs::read_dir(plugin_entry.path()) else {
+                continue;
+            };
+
+            for version_entry in version_dirs.flatten() {
+                let package_root = version_entry.path();
+                if !package_root.is_dir() || version_entry.file_name().to_string_lossy().eq_ignore_ascii_case("latest") {
+                    continue;
+                }
+                let Ok(contents) = fs::read_to_string(package_root.join(".codex-plugin").join("plugin.json")) else {
+                    continue;
+                };
+                let Ok(manifest) = serde_json::from_str::<PluginManifest>(&contents) else {
+                    continue;
+                };
+                if manifest.name.trim().is_empty() {
+                    continue;
+                }
+
+                let publisher = manifest
+                    .author
+                    .as_ref()
+                    .map(|author| author.name.trim().to_lowercase())
+                    .filter(|name| !name.is_empty())
+                    .unwrap_or_else(|| channel.to_lowercase());
+                let key = format!("{publisher}/{}", manifest.name.trim().to_lowercase());
+                let candidate = PluginPackage { channel: channel.clone(), package_root, manifest };
+                let newer = packages.get(&key).is_none_or(|existing| {
+                    match natural_version_cmp(&candidate.manifest.version, &existing.manifest.version) {
+                        Ordering::Greater => true,
+                        Ordering::Equal => candidate.package_root > existing.package_root,
+                        Ordering::Less => false,
+                    }
+                });
+                if newer {
+                    packages.insert(key, candidate);
+                }
+            }
+        }
+    }
+
+    packages.into_values().collect()
+}
+
+fn natural_version_cmp(left: &str, right: &str) -> Ordering {
+    numeric_version_parts(left)
+        .cmp(&numeric_version_parts(right))
+        .then_with(|| left.cmp(right))
+}
+
+fn numeric_version_parts(value: &str) -> Vec<u64> {
+    value
+        .split(|character: char| !character.is_ascii_digit())
+        .filter_map(|part| part.parse::<u64>().ok())
+        .collect()
+}
+
+/// Plugins Codex ships itself are part of Codex, not something the user added.
+fn plugin_origin_kind(channel: &str) -> SkillOriginKind {
+    match channel.to_lowercase().as_str() {
+        "openai-bundled" | "openai-primary-runtime" => SkillOriginKind::System,
+        _ => SkillOriginKind::Plugin,
+    }
+}
+
+fn skill_origin_for_path(root: &Path, skill_dir: &Path) -> SkillOrigin {
+    if let Some(repository) = repository_from_source_marker(skill_dir) {
+        return SkillOrigin { kind: SkillOriginKind::Collection, plugin: None, repository: Some(repository) };
+    }
+    let normalized = root.to_string_lossy().replace('\\', "/").to_lowercase();
+    if normalized.ends_with("/.codex/skills/.system") {
+        return SkillOrigin { kind: SkillOriginKind::System, plugin: None, repository: None };
+    }
+    SkillOrigin::standalone()
+}
+
+fn repository_from_source_marker(skill_dir: &Path) -> Option<RepositoryIdentity> {
+    let contents = fs::read_to_string(skill_dir.join(SOURCE_MARKER_FILE)).ok()?;
+    let source = serde_json::from_str::<GithubSourceMetadata>(&contents).ok()?;
+    if !source.kind.eq_ignore_ascii_case("github") || source.owner.trim().is_empty() || source.repo.trim().is_empty() {
+        return None;
+    }
+    Some(RepositoryIdentity {
+        id: format!("github/{}/{}", slug_id(&source.owner), slug_id(&source.repo)),
+        name: format!("{}/{}", source.owner, source.repo),
+        url: Some(format!("https://github.com/{}/{}", source.owner, source.repo)),
+    })
+}
+
+/// Lower-case ASCII words joined by `-` (for repository and plugin ids).
+fn slug_id(value: &str) -> String {
+    value
+        .chars()
+        .map(|character| if character.is_ascii_alphanumeric() { character.to_ascii_lowercase() } else { '-' })
+        .collect::<String>()
+        .split('-')
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join("-")
+}
+
+fn sort_skills(skills: &mut [ScannedSkill]) {
+    skills.sort_by(|left, right| {
+        left.name
+            .to_lowercase()
+            .cmp(&right.name.to_lowercase())
+            .then_with(|| left.id.cmp(&right.id))
+    });
 }
 
 fn is_managed_copy(skill_dir: &Path) -> bool {
@@ -447,11 +887,10 @@ fn source_label(root: &Path) -> String {
 }
 
 fn target_states(
-    root: &Path,
+    source: &str,
     skill_dir: &Path,
     target_roots: &[(&str, PathBuf)],
 ) -> Vec<TargetState> {
-    let source = source_label(root);
     let skill_folder = skill_dir
         .file_name()
         .and_then(|value| value.to_str())
@@ -461,7 +900,7 @@ fn target_states(
         .iter()
         .map(|(target_id, target_name, _)| {
             let (enabled, conflict) =
-                target_state(&source, skill_dir, skill_folder, target_id, target_name, target_roots);
+                target_state(source, skill_dir, skill_folder, target_id, target_name, target_roots);
             TargetState {
                 id: target_id.to_string(),
                 name: target_name.to_string(),
@@ -545,6 +984,189 @@ mod tests {
     use super::*;
     use crate::fs_ops::test_temp_dir as unique_temp_dir;
     use std::fs;
+
+    fn create_plain_skill(root: &Path, skill_name: &str) {
+        let skill_dir = root.join(skill_name);
+        fs::create_dir_all(&skill_dir).unwrap();
+        fs::write(
+            skill_dir.join("SKILL.md"),
+            format!("---\nname: {skill_name}\ndescription: Collection skill\n---\n"),
+        )
+        .unwrap();
+    }
+
+    fn create_plugin_skill(
+        cache_root: &Path,
+        channel: &str,
+        plugin_id: &str,
+        version: &str,
+        display_name: &str,
+        skill_name: &str,
+    ) {
+        let package_root = cache_root.join(channel).join(plugin_id).join(version);
+        let manifest_dir = package_root.join(".codex-plugin");
+        let skill_dir = package_root.join("skills").join(skill_name);
+        fs::create_dir_all(&manifest_dir).unwrap();
+        fs::create_dir_all(&skill_dir).unwrap();
+        fs::write(
+            manifest_dir.join("plugin.json"),
+            serde_json::json!({
+                "name": plugin_id,
+                "version": version,
+                "author": { "name": "OpenAI" },
+                "skills": "./skills/",
+                "repository": "https://github.com/openai/plugins",
+                "interface": { "displayName": display_name }
+            })
+            .to_string(),
+        )
+        .unwrap();
+        fs::write(skill_dir.join("SKILL.md"), format!("---\nname: {skill_name}\ndescription: Plugin skill\n---\n")).unwrap();
+    }
+
+    #[test]
+    fn plain_skills_are_standalone() {
+        let root = unique_temp_dir("scan-standalone");
+        create_plain_skill(&root, "agent-tool-safety");
+        let skills = scan_skill_roots(&[root.clone()]);
+        fs::remove_dir_all(root).unwrap();
+        assert_eq!(skills[0].origin, SkillOrigin::standalone());
+    }
+
+    #[test]
+    fn scan_skill_roots_marks_codex_system_skills() {
+        let temp_root = unique_temp_dir("scan-system-skill");
+        let root = temp_root.join(".codex").join("skills").join(".system");
+        create_plain_skill(&root, "skill-installer");
+
+        let skills = scan_skill_roots(&[root]);
+        fs::remove_dir_all(temp_root).unwrap();
+
+        assert_eq!(skills.len(), 1);
+        assert_eq!(skills[0].source, "Codex");
+        assert_eq!(skills[0].origin.kind, SkillOriginKind::System);
+        assert_eq!(skills[0].origin.plugin, None);
+    }
+
+    #[test]
+    fn scan_repository_collections_groups_marketplace_skills() {
+        let codex_root = unique_temp_dir("scan-repository-collection");
+        let package_root = codex_root.join("skills-main");
+        let marketplace_dir = package_root.join(".claude-plugin");
+        fs::create_dir_all(&marketplace_dir).unwrap();
+        fs::write(
+            marketplace_dir.join("marketplace.json"),
+            serde_json::json!({ "name": "anthropic-agent-skills" }).to_string(),
+        )
+        .unwrap();
+        create_plain_skill(&package_root.join("skills"), "alpha-skill");
+        create_plain_skill(&package_root.join("skills"), "beta-skill");
+
+        let skills = scan_repository_collections(&codex_root, &[]);
+        fs::remove_dir_all(codex_root).unwrap();
+
+        assert_eq!(skills.len(), 2);
+        assert_eq!(skills[0].origin.kind, SkillOriginKind::Collection);
+        assert_eq!(skills[0].source, "Codex");
+        let codex = skills[0].targets.iter().find(|target| target.id == "codex").unwrap();
+        assert!(codex.enabled);
+        let repository = skills[0].origin.repository.as_ref().unwrap();
+        assert_eq!(repository.id, "local/anthropic-agent-skills");
+        assert_eq!(repository.name, "anthropic-agent-skills");
+        assert_eq!(repository.url, None);
+    }
+
+    #[test]
+    fn scan_skill_roots_reads_github_repository_marker() {
+        let temp_root = unique_temp_dir("scan-github-source");
+        let root = temp_root.join(".skills-manage").join("library");
+        create_plain_skill(&root, "pdf");
+        fs::write(
+            root.join("pdf").join(SOURCE_MARKER_FILE),
+            serde_json::json!({ "kind": "github", "owner": "anthropics", "repo": "skills" }).to_string(),
+        )
+        .unwrap();
+
+        let skills = scan_skill_roots(&[root]);
+        fs::remove_dir_all(temp_root).unwrap();
+
+        assert_eq!(skills.len(), 1);
+        assert_eq!(skills[0].origin.kind, SkillOriginKind::Collection);
+        let repository = skills[0].origin.repository.as_ref().unwrap();
+        assert_eq!(repository.id, "github/anthropics/skills");
+        assert_eq!(repository.name, "anthropics/skills");
+        assert_eq!(repository.url.as_deref(), Some("https://github.com/anthropics/skills"));
+    }
+
+    #[test]
+    fn apply_skill_lock_sources_groups_github_skills_across_roots() {
+        let temp_root = unique_temp_dir("scan-skill-lock");
+        let agents_root = temp_root.join(".agents").join("skills");
+        let codex_root = temp_root.join(".codex").join("skills");
+        create_plain_skill(&agents_root, "hyperframes");
+        create_plain_skill(&codex_root, "motion-graphics");
+        let lock_path = temp_root.join(".agents").join(".skill-lock.json");
+        let locked = serde_json::json!({
+            "source": "heygen-com/hyperframes",
+            "sourceType": "github",
+            "sourceUrl": "https://github.com/heygen-com/hyperframes.git"
+        });
+        fs::write(
+            &lock_path,
+            serde_json::json!({ "skills": { "hyperframes": locked, "motion-graphics": locked } }).to_string(),
+        )
+        .unwrap();
+
+        let mut skills = scan_skill_roots(&[agents_root, codex_root]);
+        apply_skill_lock_sources(&mut skills, &lock_path);
+        fs::remove_dir_all(temp_root).unwrap();
+
+        assert_eq!(skills.len(), 2);
+        for skill in &skills {
+            assert_eq!(skill.origin.kind, SkillOriginKind::Collection);
+            let repository = skill.origin.repository.as_ref().unwrap();
+            assert_eq!(repository.id, "github/heygen-com/hyperframes");
+            assert_eq!(repository.name, "heygen-com/hyperframes");
+            assert_eq!(repository.url.as_deref(), Some("https://github.com/heygen-com/hyperframes"));
+            // Tool-folder skills get it as their source, so the list groups them.
+            assert_eq!(skill.detected_source_url.as_deref(), Some("https://github.com/heygen-com/hyperframes"));
+        }
+    }
+
+    #[test]
+    fn scan_plugin_cache_reads_manifest_and_keeps_latest_version() {
+        let cache_root = unique_temp_dir("scan-plugin-cache");
+        create_plugin_skill(&cache_root, "openai-curated-remote", "github", "0.1.8", "GitHub", "gh-fix-ci");
+        create_plugin_skill(&cache_root, "openai-curated", "github", "0.1.10", "GitHub", "gh-fix-ci");
+
+        let skills = scan_plugin_cache(&cache_root, &[]);
+        fs::remove_dir_all(cache_root).unwrap();
+
+        assert_eq!(skills.len(), 1);
+        assert_eq!(skills[0].source, "Codex");
+        assert_eq!(skills[0].origin.kind, SkillOriginKind::Plugin);
+        let codex = skills[0].targets.iter().find(|target| target.id == "codex").unwrap();
+        assert!(codex.enabled);
+        let plugin = skills[0].origin.plugin.as_ref().unwrap();
+        assert_eq!(plugin.id, "openai/github");
+        assert_eq!(plugin.name, "GitHub");
+        assert_eq!(plugin.version, "0.1.10");
+        assert_eq!(plugin.publisher, "OpenAI");
+        assert_eq!(plugin.repository.as_deref(), Some("https://github.com/openai/plugins"));
+    }
+
+    #[test]
+    fn scan_plugin_cache_marks_bundled_packages_as_system() {
+        let cache_root = unique_temp_dir("scan-bundled-plugin");
+        create_plugin_skill(&cache_root, "openai-bundled", "browser", "26.707.31428", "Browser", "browser");
+
+        let skills = scan_plugin_cache(&cache_root, &[]);
+        fs::remove_dir_all(cache_root).unwrap();
+
+        assert_eq!(skills.len(), 1);
+        assert_eq!(skills[0].origin.kind, SkillOriginKind::System);
+        assert_eq!(skills[0].origin.plugin.as_ref().unwrap().name, "Browser");
+    }
 
     #[test]
     fn a_copy_of_the_tools_own_version_counts_as_enabled() {

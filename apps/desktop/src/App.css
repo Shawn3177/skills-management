@@ -1695,6 +1695,60 @@ a:hover {
   background: transparent;
 }
 
+/* A tool without a logo file: its short name in its color. */
+.tool-logo.tool-mono {
+  display: inline-grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 4px;
+  color: #ffffff;
+  font-size: 8.5px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+.tool-logo.tool-mono.dim {
+  opacity: 0.35;
+}
+
+/* Filter the lists by where skills come from. */
+.origin-filter {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.origin-filter button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 26px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--text-2);
+  font-size: 12.5px;
+}
+
+.origin-filter button[aria-selected="true"] {
+  border-color: var(--accent-line);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.origin-filter .count {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.managed-note {
+  flex: none;
+  color: var(--muted);
+  font-size: 12px;
+}
+
 .conflict-dot {
   position: absolute;
   top: 3px;

@@ -12,7 +12,7 @@ use std::time::{Duration, SystemTime};
 /// order: (id, name, config folder in the home directory). Its skills live in
 /// `~/<folder>/skills`, each in a folder with a SKILL.md. Paths follow each
 /// tool's own documentation, or (WorkBuddy) the folder the app creates itself.
-pub const TOOLS: [(&str, &str, &str); 12] = [
+pub const TOOLS: [(&str, &str, &str); 13] = [
     ("claude-code", "Claude Code", ".claude"),
     ("codex", "Codex", ".codex"),
     ("gemini-cli", "Gemini CLI", ".gemini"),
@@ -25,9 +25,13 @@ pub const TOOLS: [(&str, &str, &str); 12] = [
     ("qoder", "Qoder", ".qoder"),
     ("codebuddy", "CodeBuddy", ".codebuddy"),
     ("workbuddy", "WorkBuddy", ".workbuddy"),
+    // GitHub Copilot in VS Code reads personal skills from ~/.copilot/skills.
+    // It also reads ~/.claude/skills, so a skill enabled for Claude Code shows
+    // up in VS Code too.
+    ("vs-code", "VS Code", ".copilot"),
 ];
 
-const TOOL_IDS: [&str; 12] = [
+const TOOL_IDS: [&str; 13] = [
     "claude-code",
     "codex",
     "gemini-cli",
@@ -40,6 +44,7 @@ const TOOL_IDS: [&str; 12] = [
     "qoder",
     "codebuddy",
     "workbuddy",
+    "vs-code",
 ];
 
 /// Tools that keep skills in category folders (`skills/<category>/<skill>`).
@@ -1117,6 +1122,35 @@ mod tests {
             assert_eq!(profile.name, *name);
             assert!(profile.root.ends_with(std::path::Path::new(folder).join("skills")));
         }
-        assert!(target_profile("vs-code").is_err());
+        assert!(target_profile("vs-code").is_ok());
+    }
+
+    #[test]
+    fn vs_code_target_uses_copilot_skills_folder() {
+        let root = target_root_for("vs-code").unwrap();
+
+        assert!(root.ends_with(Path::new(".copilot").join("skills")));
+        assert_eq!(target_name_for("vs-code"), Some("VS Code"));
+        assert!(toggleable_target_ids().contains(&"vs-code"));
+    }
+
+    #[test]
+    fn enables_and_disables_skill_for_vs_code() {
+        let data_root = unique_temp_dir("data-root-vs-code");
+        let library_skill = create_library_skill(&data_root, "vs-code-skill");
+        let target_root = unique_temp_dir("copilot-target-root");
+
+        let enabled =
+            set_skill_target_enabled_with_root(&library_skill, "vs-code", true, &data_root, &target_root).unwrap();
+        assert!(enabled.changed);
+        assert!(is_managed_target_copy(&target_root.join("vs-code-skill"), &library_skill, "vs-code"));
+
+        let disabled =
+            set_skill_target_enabled_with_root(&library_skill, "vs-code", false, &data_root, &target_root).unwrap();
+        assert!(disabled.changed);
+        assert!(!target_root.join("vs-code-skill").exists());
+
+        fs::remove_dir_all(data_root).unwrap();
+        fs::remove_dir_all(target_root).unwrap();
     }
 }

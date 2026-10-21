@@ -33,6 +33,8 @@ export interface SkillRecord {
   issues?: string[];
   /** Library skills: the tools it may not suit (tools it suits are left out). */
   compat?: CompatSummary[];
+  /** What the skill belongs to: a repository collection, a Codex plugin, Codex itself, or nothing. */
+  origin?: SkillOrigin;
   /** Library skills: tools that have their own version in the repository. */
   variants?: SkillVariant[];
 }
@@ -46,6 +48,41 @@ export interface SkillVariant {
   path: string;
   /** Missing in older scans: the tool's own version. */
   choice?: VariantChoice;
+}
+
+export type SkillOriginKind = "standalone" | "collection" | "plugin" | "system";
+
+export interface PluginIdentity {
+  id: string;
+  name: string;
+  version: string;
+  publisher: string;
+  repository?: string | null;
+}
+
+export interface RepositoryIdentity {
+  id: string;
+  name: string;
+  url: string | null;
+}
+
+export interface SkillOrigin {
+  kind: SkillOriginKind;
+  plugin: PluginIdentity | null;
+  repository?: RepositoryIdentity | null;
+}
+
+/** Display order of the source categories. */
+export const originKinds: SkillOriginKind[] = ["collection", "plugin", "standalone", "system"];
+
+export function originKind(record: SkillRecord): SkillOriginKind {
+  return record.origin?.kind ?? "standalone";
+}
+
+/** Plugin and system skills belong to Codex: they can't be added to the library. */
+export function isManagedByCodex(record: SkillRecord): boolean {
+  const kind = originKind(record);
+  return kind === "plugin" || kind === "system";
 }
 
 export type CompatLevel = "compatible" | "degraded" | "incompatible";
@@ -82,7 +119,8 @@ export type ToolId =
   | "qwen-code"
   | "qoder"
   | "codebuddy"
-  | "workbuddy";
+  | "workbuddy"
+  | "vs-code";
 
 export interface Tool {
   id: ToolId;
@@ -111,6 +149,7 @@ export const allTools: Tool[] = [
   { id: "qoder", name: "Qoder", sourceLabel: "Qoder", mono: "Qd", color: "#2adb5c", folder: "~/.qoder/skills" },
   { id: "codebuddy", name: "CodeBuddy", sourceLabel: "CodeBuddy", mono: "CB", color: "#6c4cff", folder: "~/.codebuddy/skills" },
   { id: "workbuddy", name: "WorkBuddy", sourceLabel: "WorkBuddy", mono: "WB", color: "#22c38e", folder: "~/.workbuddy/skills" },
+  { id: "vs-code", name: "VS Code", sourceLabel: "VS Code", mono: "VS", color: "#007acc", folder: "~/.copilot/skills" },
 ];
 
 /** Always shown unless the user hides them. */
@@ -287,6 +326,8 @@ export interface SkillSeries {
   linked: boolean;
   /** Grouped by a shared name prefix (`remotion-*`) because no source is known yet. */
   byPrefix?: boolean;
+  /** A short line after the name, e.g. a plugin's version and publisher. */
+  detail?: string;
 }
 
 /** Skills without a known source that share a name prefix this often form a series. */
@@ -327,6 +368,26 @@ export function groupBySeries(records: SkillRecord[]): { series: SkillSeries[]; 
   }
   series.sort((left, right) => left.repository.localeCompare(right.repository));
 
+  // A local repository collection (no GitHub address), e.g. a marketplace
+  // package Codex keeps on disk: group by the repository's name.
+  const byCollection = new Map<string, { name: string; members: SkillRecord[] }>();
+  for (const record of records) {
+    const repository = record.origin?.repository;
+    if (grouped.has(record) || githubSource(record) || !repository || repository.url) {
+      continue;
+    }
+    const entry = byCollection.get(repository.id) ?? { name: repository.name, members: [] };
+    entry.members.push(record);
+    byCollection.set(repository.id, entry);
+  }
+  for (const [id, { name, members }] of [...byCollection].sort(([, left], [, right]) => left.name.localeCompare(right.name))) {
+    if (members.length < 2) {
+      continue;
+    }
+    members.forEach((member) => grouped.add(member));
+    series.push({ key: `collection:${id}`, repository: name, url: "", skills: members, linked: false });
+  }
+
   // No source yet (not identified, offline): skills installed as a set
   // usually share a prefix, e.g. remotion-render, remotion-docs …
   const byPrefix = new Map<string, SkillRecord[]>();
@@ -347,6 +408,29 @@ export function groupBySeries(records: SkillRecord[]): { series: SkillSeries[]; 
   }
 
   return { series, singles: records.filter((record) => !grouped.has(record)) };
+}
+
+/**
+ * Codex-managed skills by package: one group per plugin (newest version only,
+ * as scanned), plus Codex's own system skills under `systemLabel`.
+ */
+export function groupManagedByCodex(records: SkillRecord[], systemLabel: string): SkillSeries[] {
+  const groups = new Map<string, SkillSeries>();
+  for (const record of records) {
+    const plugin = record.origin?.plugin ?? null;
+    const key = plugin ? `plugin:${plugin.id}` : "system:codex";
+    const group = groups.get(key) ?? {
+      key,
+      repository: plugin ? plugin.name : systemLabel,
+      url: plugin?.repository ?? "",
+      skills: [],
+      linked: false,
+      detail: plugin ? `v${plugin.version} · ${plugin.publisher}` : undefined,
+    };
+    group.skills.push(record);
+    groups.set(key, group);
+  }
+  return [...groups.values()].sort((left, right) => left.repository.localeCompare(right.repository));
 }
 
 function seriesUrl(repo: GithubLocation, members: GithubLocation[]): string {

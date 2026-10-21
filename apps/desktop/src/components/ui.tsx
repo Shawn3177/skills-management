@@ -13,7 +13,7 @@ import piLogo from "../assets/tools/pi.svg";
 import qoderLogo from "../assets/tools/qoder.svg";
 import qwenLogo from "../assets/tools/qwen-code.svg";
 import workbuddyLogo from "../assets/tools/workbuddy.png";
-import { monogram, tileColors } from "../lib/skills";
+import { allTools, monogram, tileColors } from "../lib/skills";
 
 const toolLogos: Record<string, string> = {
   "claude-code": claudeCodeLogo,
@@ -34,7 +34,20 @@ const toolLogos: Record<string, string> = {
 export function ToolLogo({ id, dim = false }: { id: string; dim?: boolean }) {
   const logo = toolLogos[id];
   if (!logo) {
-    return null;
+    // No logo file shipped (e.g. VS Code): the tool's short name in its color.
+    const tool = allTools.find((candidate) => candidate.id === id);
+    if (!tool) {
+      return null;
+    }
+    return (
+      <span
+        className={`tool-logo tool-mono ${dim ? "dim" : ""}`}
+        style={{ background: tool.color }}
+        aria-hidden="true"
+      >
+        {tool.mono}
+      </span>
+    );
   }
   return <img className={`tool-logo ${dim ? "dim" : ""}`} src={logo} alt="" width={18} height={18} aria-hidden="true" />;
 }

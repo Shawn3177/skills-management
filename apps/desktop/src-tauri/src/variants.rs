@@ -31,7 +31,7 @@ const MAX_CANDIDATE_BYTES: u64 = 50 * 1024 * 1024;
 /// Where a tool keeps skills inside a repository: (prefix, tool id, rank).
 /// For the same tool a lower rank wins: Codex reads `.agents/skills` too, but
 /// a `.codex*` folder is written for Codex alone.
-const TOOL_PREFIXES: [(&str, &str, u8); 9] = [
+const TOOL_PREFIXES: [(&str, &str, u8); 10] = [
     (".claude/skills/", "claude-code", 0),
     (".codex/skills/", "codex", 0),
     (".codex-plugin/skills/", "codex", 0),
@@ -41,6 +41,8 @@ const TOOL_PREFIXES: [(&str, &str, u8); 9] = [
     (".qwen/skills/", "qwen-code", 0),
     (".qoder/skills/", "qoder", 0),
     (".codebuddy/skills/", "codebuddy", 0),
+    // GitHub Copilot (VS Code) reads a repository's .github/skills.
+    (".github/skills/", "vs-code", 0),
 ];
 
 /// Which version a tool with its own version gets: that one (the default)
@@ -489,6 +491,16 @@ pub(crate) mod tests {
         assert_eq!(fs::read_to_string(staged.join("claude-code").join("SKILL.md")).unwrap(), claude);
         assert_eq!(requests.get(), 2, "blobs already read are not fetched again");
         let _ = fs::remove_dir_all(data_root);
+    }
+
+    #[test]
+    fn a_github_folder_version_is_for_vs_code() {
+        let zip = build_zip(&[
+            (".agents/skills/dev/SKILL.md", FULL),
+            (".github/skills/dev/SKILL.md", "---\nname: dev\n---\n\nCopilot-specific steps for the dev cycle.\n"),
+        ]);
+        let found = detect_in_zip(&zip, ".agents/skills/dev").unwrap();
+        assert_eq!(found, vec![("vs-code".to_string(), ".github/skills/dev".to_string())]);
     }
 
     #[test]

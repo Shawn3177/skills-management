@@ -4,7 +4,10 @@ import {
   filterSkills,
   folderName,
   groupBySeries,
+  groupManagedByCodex,
+  isManagedByCodex,
   monogram,
+  originKind,
   parseGithubLocation,
   partitionSkills,
   sourceLine,
@@ -178,5 +181,59 @@ describe("display helpers", () => {
     const first = record({ name: "a", sourceUrl: "https://github.com/o/r/tree/main/a" });
     const second = record({ name: "b", sourceUrl: "https://github.com/o/r/tree/dev/b" });
     expect(groupBySeries([first, second]).series[0].url).toBe("https://github.com/o/r");
+  });
+});
+
+describe("Codex-managed and local collections", () => {
+  const base = {
+    description: "",
+    source: "Codex",
+    health: "healthy" as const,
+    targets: [],
+    supportFiles: ["SKILL.md"],
+  };
+  const plugin = (name: string, version: string) => ({
+    ...base,
+    id: name,
+    name,
+    sourcePath: `C:/x/${name}`,
+    origin: {
+      kind: "plugin" as const,
+      plugin: { id: "openai/github", name: "GitHub", version, publisher: "OpenAI", repository: null },
+    },
+  });
+
+  it("groups plugin skills by plugin and system skills together", () => {
+    const system = { ...base, id: "s", name: "skill-installer", sourcePath: "C:/x/s", origin: { kind: "system" as const, plugin: null } };
+    const groups = groupManagedByCodex([plugin("gh-fix-ci", "0.1.10"), plugin("gh-address-comments", "0.1.10"), system], "Codex system skills");
+    expect(groups.map((group) => [group.repository, group.skills.length, group.detail ?? "", group.url])).toEqual([
+      ["Codex system skills", 1, "", ""],
+      ["GitHub", 2, "v0.1.10 · OpenAI", ""],
+    ]);
+  });
+
+  it("groups a local repository collection by its name", () => {
+    const local = (name: string) => ({
+      ...base,
+      id: name,
+      name,
+      sourcePath: `C:/x/${name}`,
+      origin: {
+        kind: "collection" as const,
+        plugin: null,
+        repository: { id: "local/kit", name: "kit", url: null },
+      },
+    });
+    const { series, singles } = groupBySeries([local("a"), local("b"), { ...base, id: "c", name: "c", sourcePath: "C:/x/c" }]);
+    expect(series.map((group) => [group.key, group.repository, group.url, group.skills.length])).toEqual([
+      ["collection:local/kit", "kit", "", 2],
+    ]);
+    expect(singles.map((record) => record.name)).toEqual(["c"]);
+  });
+
+  it("treats records without an origin as standalone and only plugin/system ones as Codex-managed", () => {
+    expect(originKind({ ...base, id: "a", name: "a", sourcePath: "C:/x/a" })).toBe("standalone");
+    expect(isManagedByCodex(plugin("p", "1"))).toBe(true);
+    expect(isManagedByCodex({ ...base, id: "a", name: "a", sourcePath: "C:/x/a" })).toBe(false);
   });
 });

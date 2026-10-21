@@ -5,7 +5,18 @@ import remarkGfm from "remark-gfm";
 import type { TFunction } from "../i18n/useLocale";
 import { api, errorText, isBridgeUnavailable, type CompatReport } from "../lib/api";
 import { compatFor, compatPlace, compatReason } from "../lib/compat";
-import { githubSource, isEnabledIn, isLibrarySkill, tildePath, tools, type SkillRecord, type ToolId, type VariantChoice } from "../lib/skills";
+import {
+  githubSource,
+  isEnabledIn,
+  isLibrarySkill,
+  isManagedByCodex,
+  originKind,
+  tildePath,
+  tools,
+  type SkillRecord,
+  type ToolId,
+  type VariantChoice,
+} from "../lib/skills";
 import { GithubButton, SkillTile, ToolLogo } from "./ui";
 
 type Props = {
@@ -97,6 +108,10 @@ export function DetailView({
                 <Pencil size={14} strokeWidth={1.9} aria-hidden="true" />
                 {t("actions.edit")}
               </button>
+            ) : isManagedByCodex(skill) ? (
+              <button type="button" className="button small" disabled>
+                {t("actions.managedByCodex")}
+              </button>
             ) : (
               <button type="button" className="button small primary" disabled={busy} onClick={() => onAddToLibrary(skill)}>
                 <FolderPlus size={14} strokeWidth={1.9} aria-hidden="true" />
@@ -107,6 +122,30 @@ export function DetailView({
         </div>
         <p className="detail-description">{skill.description}</p>
         <dl className="detail-facts">
+          <dt>{t("detail.type")}</dt>
+          <dd>{t(`origin.${originKind(skill)}`)}</dd>
+          {skill.origin?.plugin ? (
+            <>
+              <dt>{t("detail.plugin")}</dt>
+              <dd>{skill.origin.plugin.name}</dd>
+              <dt>{t("detail.version")}</dt>
+              <dd className="mono">{skill.origin.plugin.version}</dd>
+              <dt>{t("detail.publisher")}</dt>
+              <dd>{skill.origin.plugin.publisher}</dd>
+              {skill.origin.plugin.repository ? (
+                <>
+                  <dt>{t("detail.repositoryUrl")}</dt>
+                  <dd className="mono">{skill.origin.plugin.repository}</dd>
+                </>
+              ) : null}
+            </>
+          ) : null}
+          {skill.origin?.repository && !github ? (
+            <>
+              <dt>{t("detail.repository")}</dt>
+              <dd>{skill.origin.repository.name}</dd>
+            </>
+          ) : null}
           <dt>{t("detail.location")}</dt>
           <dd className="mono">{tildePath(skill.sourcePath, home)}</dd>
           {github ? (

@@ -154,7 +154,7 @@ const FRONTMATTER_RULES: [(&str, &str, &[&str], CompatLevel); 4] = [
 ];
 
 /// Words that name a tool in a `compatibility` declaration.
-const TOOL_ALIASES: [(&str, &[&str]); 9] = [
+const TOOL_ALIASES: [(&str, &[&str]); 10] = [
     ("claude-code", &["claude"]),
     ("codex", &["codex"]),
     ("gemini-cli", &["gemini"]),
@@ -164,6 +164,7 @@ const TOOL_ALIASES: [(&str, &[&str]); 9] = [
     ("hermes", &["hermes"]),
     ("qwen-code", &["qwen"]),
     ("qoder", &["qoder"]),
+    ("vs-code", &["vs code", "vscode", "copilot"]),
 ];
 
 struct Feature {
@@ -816,6 +817,10 @@ mod tests {
 
         let general = skill(&root, "general", "---\nname: general\ndescription: x\ncompatibility: Needs Python 3.10+\n---\n\nBody.\n");
         assert_eq!(report(&general, "codex").level, CompatLevel::Compatible);
+
+        let copilot = skill(&root, "copilot", "---\nname: copilot\ndescription: x\ncompatibility: GitHub Copilot only\n---\n\nBody.\n");
+        assert_eq!(report(&copilot, "vs-code").level, CompatLevel::Compatible);
+        assert_eq!(report(&copilot, "claude-code").level, CompatLevel::Incompatible);
         let _ = fs::remove_dir_all(root);
     }
 
@@ -874,7 +879,7 @@ mod tests {
         fs::write(outside.join("SKILL.md"), "x").unwrap();
 
         assert!(check_skill_compat_with_root(&outside, "codex", &root).is_err());
-        assert!(check_skill_compat_with_root(&dir, "vs-code", &root).is_err());
+        assert!(check_skill_compat_with_root(&dir, "notepad", &root).is_err());
         assert!(check_skill_compat_with_root(&root.join("library"), "codex", &root).is_err());
         let _ = fs::remove_dir_all(root);
     }

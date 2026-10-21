@@ -20,10 +20,15 @@ import {
   folderName,
   githubSource,
   groupBySeries,
+  groupManagedByCodex,
   hasConflictIn,
   isEnabledIn,
+  isManagedByCodex,
+  originKind,
+  originKinds,
   tildePath,
   tools,
+  type SkillOriginKind,
   type SkillRecord,
   type SkillSeries,
   type ToolId,
@@ -91,14 +96,34 @@ export function MainView(props: Props) {
         : scanState === "preview"
           ? t("status.preview")
           : "";
-  const toolLocals = currentTool ? locals.filter((skill) => skill.source === currentTool.sourceLabel) : locals;
+  const allToolLocals = currentTool ? locals.filter((skill) => skill.source === currentTool.sourceLabel) : locals;
   const [expanded, setExpanded] = useState<Set<string>>(readExpanded);
   const [linking, setLinking] = useState(false);
+  const [originFilter, setOriginFilter] = useState<"all" | SkillOriginKind>("all");
+  // Source categories present, with how many skills each has.
+  const originCounts = originKinds
+    .map((kind) => ({ kind, count: [...visibleLibrary, ...allToolLocals].filter((skill) => originKind(skill) === kind).length }))
+    .filter((entry) => entry.count > 0);
+  const filter = originCounts.some((entry) => entry.kind === originFilter) ? originFilter : "all";
+  const byOrigin = (records: SkillRecord[]) =>
+    filter === "all" ? records : records.filter((skill) => originKind(skill) === filter);
+  const shownLibrary = byOrigin(visibleLibrary);
+  const toolLocals = byOrigin(allToolLocals);
+  // Plugin and system skills belong to Codex: listed, but never added to the library.
+  const importableLocals = toolLocals.filter((skill) => !isManagedByCodex(skill));
+  const pluginGroups = groupManagedByCodex(
+    toolLocals.filter((skill) => originKind(skill) === "plugin"),
+    t("sections.systemGroup"),
+  );
+  const systemGroups = groupManagedByCodex(
+    toolLocals.filter((skill) => originKind(skill) === "system"),
+    t("sections.systemGroup"),
+  );
   // While searching, every series with a match is shown open.
   const searching = query.trim() !== "";
-  const libraryGroups = groupBySeries(visibleLibrary);
-  const localGroups = groupBySeries(toolLocals);
-  const unsourced = toolLocals.filter((skill) => !githubSource(skill)).length;
+  const libraryGroups = groupBySeries(shownLibrary);
+  const localGroups = groupBySeries(importableLocals);
+  const unsourced = importableLocals.filter((skill) => !githubSource(skill)).length;
   // Repositories grouped only because they were linked (the user can undo that).
   const linkedRepositories = [
     ...new Set(
@@ -146,6 +171,8 @@ export function MainView(props: Props) {
 
   const libraryCard = (skill: SkillRecord) => <SkillCard key={skill.id} {...props} skill={skill} />;
   const localCard = (skill: SkillRecord) => <LocalCard key={skill.id} {...props} skill={skill} />;
+  const managedCard = (skill: SkillRecord) => <ManagedCard key={skill.id} {...props} skill={skill} />;
+  const managedNote = <span className="managed-note">{t("actions.managedByCodex")}</span>;
 
   return (
     <div className="main-view">
@@ -193,6 +220,25 @@ export function MainView(props: Props) {
         />
       ) : null}
 
+      {originCounts.length > 1 ? (
+        <div className="origin-filter" role="tablist" aria-label={t("filters.origin")}>
+          {[{ kind: "all" as const, count: visibleLibrary.length + allToolLocals.length }, ...originCounts].map(
+            ({ kind, count }) => (
+              <button
+                type="button"
+                role="tab"
+                key={kind}
+                aria-selected={filter === kind}
+                onClick={() => setOriginFilter(kind)}
+              >
+                {t(`filters.${kind}`)}
+                <span className="count">{count}</span>
+              </button>
+            ),
+          )}
+        </div>
+      ) : null}
+
       {scanNote ? (
         <p
           className={`scan-note ${scanState === "error" ? "error" : ""}`}
@@ -207,7 +253,7 @@ export function MainView(props: Props) {
           renderSeries(series, "library", libraryCard),
         )}
         {libraryGroups.singles.map(libraryCard)}
-        {visibleLibrary.length === 0 && scanState !== "scanning" ? (
+        {visibleLibrary.length === 0 && scanState !== "scanning" && filter === "all" ? (
           <div className="empty-state">
             <strong>{library.length === 0 ? t("empty.noSkillsTitle") : t("empty.noMatchTitle")}</strong>
             <span>{library.length === 0 ? t("empty.noSkillsBody") : t("empty.noMatchBody")}</span>
@@ -234,7 +280,7 @@ export function MainView(props: Props) {
             ) : null}
             <AddAllButton
               t={t}
-              skills={toolLocals}
+              skills={importableLocals}
               busy={props.busyKey !== null}
               working={props.busyKey === "locals:add-all"}
               onConfirm={props.onAddAllToLibrary}
@@ -261,6 +307,22 @@ export function MainView(props: Props) {
             ),
           )}
           {localGroups.singles.map(localCard)}
+          {pluginGroups.length > 0 ? (
+            <div className="divider-label">
+              <span role="heading" aria-level={3}>
+                {t("sections.plugin")}
+              </span>
+            </div>
+          ) : null}
+          {pluginGroups.map((series) => renderSeries(series, "managed", managedCard, managedNote))}
+          {systemGroups.length > 0 ? (
+            <div className="divider-label">
+              <span role="heading" aria-level={3}>
+                {t("sections.system")}
+              </span>
+            </div>
+          ) : null}
+          {systemGroups.map((series) => renderSeries(series, "managed", managedCard, managedNote))}
         </section>
       ) : null}
     </div>
@@ -341,10 +403,11 @@ function SeriesGroup({
               <Star className="star-mark" size={13} strokeWidth={2.2} aria-label={t("mine.starred")} role="img" />
             ) : null}
             <span className="tag neutral">{t("series.count", { count: series.skills.length })}</span>
+            {series.detail ? <span className="muted small">{series.detail}</span> : null}
           </span>
           
         </span>
-        {series.byPrefix ? null : (
+        {series.byPrefix || !series.url ? null : (
           <GithubButton t={t} name={series.repository} url={series.url} onOpenUrl={onOpenUrl} />
         )}
         {action}
@@ -557,6 +620,26 @@ function openOnCardClick(event: { target: EventTarget }, open: () => void) {
   }
 }
 
+/** A skill Codex manages (plugin or system): shown, never added to the library. */
+function ManagedCard({ t, skill, onShowDetail, home }: Props & { skill: SkillRecord }) {
+  return (
+    <article className="skill-card local clickable" onClick={(event) => openOnCardClick(event, () => onShowDetail(skill))}>
+      <SkillTile name={skill.name} muted />
+      <div className="card-main">
+        <span className="card-title">
+          <button type="button" className="name-button" onClick={() => onShowDetail(skill)}>
+            {skill.name}
+          </button>
+        </span>
+        <span className="card-sub" title={tildePath(skill.sourcePath, home)}>
+          {skill.description}
+        </span>
+      </div>
+      <PlatformBadges t={t} name={skill.name} sources={[skill.source]} />
+    </article>
+  );
+}
+
 function LocalCard({ t, skill, busyKey, onAddToLibrary, onOpenUrl, onShowDetail, home }: Props & { skill: SkillRecord }) {
   const github = githubSource(skill);
   return (
@@ -655,6 +738,9 @@ function SkillCard({
         ) : (
           <span className="card-sub">{skill.description}</span>
         )}
+        {currentTool?.id === "vs-code" && !enabledHere && isEnabledIn(skill, "claude-code") ? (
+          <span className="card-sub muted small">{t("targets.vsCodeViaClaude")}</span>
+        ) : null}
       </div>
 
       <span className="hover-actions">
@@ -739,7 +825,13 @@ function SkillCard({
                 type="button"
                 key={tool.id}
                 className={`tool-pill icon ${on && !broken ? "on" : ""}`}
-                title={fit ? `${tool.name} · ${fit}` : tool.name}
+                title={
+                  fit
+                    ? `${tool.name} · ${fit}`
+                    : tool.id === "vs-code" && !on && isEnabledIn(skill, "claude-code")
+                      ? `${tool.name} · ${t("targets.vsCodeViaClaude")}`
+                      : tool.name
+                }
                 aria-pressed={on}
                 aria-label={
                   broken

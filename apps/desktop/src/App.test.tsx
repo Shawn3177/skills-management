@@ -171,10 +171,10 @@ describe("App", () => {
     expect(trigger).toHaveAttribute("aria-expanded", "true");
 
     const options = within(screen.getByRole("listbox")).getAllByRole("option");
-    expect(options).toHaveLength(13); // All + 12 tools
+    expect(options).toHaveLength(14); // All + 13 tools
     await waitFor(() => expect(screen.getByRole("option", { name: "Qwen Code 0" })).toBeInTheDocument());
     expect(screen.getByRole("option", { name: "WorkBuddy Not found" })).toBeInTheDocument();
-    expect(screen.queryByRole("option", { name: /^VS Code/ })).not.toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "VS Code Not found" })).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("option", { name: "Qwen Code 0" }));
     expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
@@ -796,6 +796,156 @@ describe("App", () => {
     await waitFor(() =>
       expect(calls("set_skill_target_enabled")).toEqual([
         { sourcePath: safety.sourcePath, targetId: "codex", enabled: true },
+      ]),
+    );
+  });
+
+  const codexHome = "C:/Users/example/.codex";
+  const pluginSkill = (name: string) => ({
+    id: `plugin-${name}`,
+    name,
+    description: `${name} from the GitHub plugin.`,
+    source: "Codex",
+    sourcePath: `${codexHome}/plugins/cache/openai-curated/github/0.1.10/skills/${name}`,
+    health: "healthy",
+    targets: targets(false, true),
+    supportFiles: ["SKILL.md"],
+    origin: {
+      kind: "plugin",
+      plugin: {
+        id: "openai/github",
+        name: "GitHub",
+        version: "0.1.10",
+        publisher: "OpenAI",
+        repository: "https://github.com/openai/plugins",
+      },
+    },
+  });
+  const systemSkill = {
+    id: "system-skill-installer",
+    name: "skill-installer",
+    description: "Installs Codex skills.",
+    source: "Codex",
+    sourcePath: `${codexHome}/skills/.system/skill-installer`,
+    health: "healthy",
+    targets: targets(false, true),
+    supportFiles: ["SKILL.md"],
+    origin: { kind: "system", plugin: null },
+  };
+  const marketplaceSkill = (name: string) => ({
+    id: `market-${name}`,
+    name,
+    description: `${name} from a local package.`,
+    source: "Codex",
+    sourcePath: `${codexHome}/skills-main/skills/${name}`,
+    health: "healthy",
+    targets: targets(false, true),
+    supportFiles: ["SKILL.md"],
+    origin: {
+      kind: "collection",
+      plugin: null,
+      repository: { id: "local/anthropic-agent-skills", name: "anthropic-agent-skills", url: null },
+    },
+  });
+  const codexScan = [
+    review,
+    localOnly,
+    pluginSkill("gh-fix-ci"),
+    pluginSkill("gh-address-comments"),
+    systemSkill,
+    marketplaceSkill("algorithmic-art"),
+    marketplaceSkill("canvas-design"),
+  ];
+
+  it("lists Codex plugin and system skills apart and never offers to add them to the library", async () => {
+    mockBackend({}, codexScan);
+    await renderApp();
+
+    expect(screen.getByRole("heading", { name: "Codex plugins" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "System components" })).toBeInTheDocument();
+    expect(screen.getByText("v0.1.10 · OpenAI")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "gh-fix-ci" })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Expand GitHub" }));
+    expect(screen.getByRole("button", { name: "gh-fix-ci" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "gh-address-comments" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Add gh-fix-ci to the shared library" })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Expand Codex system skills" }));
+    expect(screen.queryByRole("button", { name: "Add skill-installer to the shared library" })).not.toBeInTheDocument();
+
+    // "Add all" counts only skills that can go to the library (not plugin or system ones).
+    fireEvent.click(screen.getByRole("button", { name: "Add all to the shared library" }));
+    expect(screen.getByText("Add all 3 skills to the shared library?")).toBeInTheDocument();
+  });
+
+  it("shows a plugin skill's plugin, version and publisher, and that Codex manages it", async () => {
+    mockBackend({ read_skill_markdown: () => "Body" }, codexScan);
+    await renderApp();
+
+    fireEvent.click(screen.getByRole("button", { name: "Expand GitHub" }));
+    fireEvent.click(screen.getByRole("button", { name: "gh-fix-ci" }));
+
+    expect(await screen.findByText("Plugin skill")).toBeInTheDocument();
+    expect(screen.getByText("0.1.10")).toBeInTheDocument();
+    expect(screen.getByText("OpenAI")).toBeInTheDocument();
+    expect(screen.getByText("https://github.com/openai/plugins")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Managed by Codex" })).toBeDisabled();
+    expect(screen.queryByRole("button", { name: "Add to library" })).not.toBeInTheDocument();
+  });
+
+  it("groups a local package's skills under its name, with no GitHub link", async () => {
+    mockBackend({ read_skill_markdown: () => "Body" }, codexScan);
+    await renderApp();
+
+    const expand = screen.getByRole("button", { name: "Expand anthropic-agent-skills" });
+    const group = expand.closest(".series") as HTMLElement;
+    expect(within(group).queryByRole("button", { name: /GitHub/ })).not.toBeInTheDocument();
+    fireEvent.click(expand);
+    fireEvent.click(screen.getByRole("button", { name: "algorithmic-art" }));
+    expect(await screen.findByText("Repository collection")).toBeInTheDocument();
+    expect(screen.getByText("anthropic-agent-skills")).toBeInTheDocument();
+  });
+
+  it("filters both lists by source category", async () => {
+    mockBackend({}, codexScan);
+    await renderApp();
+
+    const tabs = within(screen.getByRole("tablist", { name: "Filter by source" })).getAllByRole("tab");
+    expect(tabs.map((tab) => tab.textContent)).toEqual([
+      "All7",
+      "Collections2",
+      "Codex plugins2",
+      "Standalone2",
+      "System1",
+    ]);
+
+    fireEvent.click(screen.getByRole("tab", { name: /Codex plugins/ }));
+    expect(screen.getByRole("button", { name: "Expand GitHub" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "code-review" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Expand anthropic-agent-skills" })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("tab", { name: /Standalone/ }));
+    expect(screen.getByRole("button", { name: "code-review" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Expand GitHub" })).not.toBeInTheDocument();
+  });
+
+  it("toggles VS Code and notes when it already reads the Claude Code copy", async () => {
+    mockBackend(
+      {
+        get_app_status: () => ({ ...appStatus, installedTools: ["vs-code"] }),
+        set_skill_target_enabled: () => ({ enabled: true, changed: true }),
+      },
+      [review, safety, broken],
+    );
+    await renderApp();
+
+    const pill = await within(card("agent-tool-safety")).findByRole("button", { name: "Enable agent-tool-safety in VS Code" });
+    expect(pill).toHaveAttribute("title", "VS Code · Not enabled on its own; VS Code reads the Claude Code copy");
+    fireEvent.click(pill);
+    await waitFor(() =>
+      expect(calls("set_skill_target_enabled")).toEqual([
+        { sourcePath: safety.sourcePath, targetId: "vs-code", enabled: true },
       ]),
     );
   });
