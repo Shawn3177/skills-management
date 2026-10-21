@@ -28,6 +28,8 @@ export type TargetToggleResult = {
   changed: boolean;
   targetPath: string;
   message: string;
+  /** Enabled from the tool's own version: its folder in the repository. */
+  variant?: string | null;
 };
 
 export type CompatReport = {

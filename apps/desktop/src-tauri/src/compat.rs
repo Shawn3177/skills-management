@@ -212,7 +212,7 @@ pub fn acknowledge_skill_compat(source_path: String, target_id: String) -> Resul
 fn check_skill_compat_with_root(skill_dir: &Path, target_id: &str, data_root: &Path) -> Result<CompatReport, String> {
     let target_name = targets::target_name_for(target_id).ok_or_else(|| format!("Unknown tool: {target_id}"))?;
     let skill_dir = library_skill_dir(skill_dir, data_root)?;
-    let inspection = inspect(&skill_dir);
+    let inspection = inspect(&crate::variants::effective_source(&skill_dir, target_id));
     let acknowledged = is_acknowledged(&load_acks(data_root), &skill_dir, target_id, &inspection);
     Ok(inspection.report(target_id, target_name, acknowledged))
 }
@@ -224,7 +224,7 @@ fn acknowledge_skill_compat_with_root(
 ) -> Result<CompatReport, String> {
     let target_name = targets::target_name_for(target_id).ok_or_else(|| format!("Unknown tool: {target_id}"))?;
     let skill_dir = library_skill_dir(skill_dir, data_root)?;
-    let inspection = inspect(&skill_dir);
+    let inspection = inspect(&crate::variants::effective_source(&skill_dir, target_id));
     let blob = inspection
         .skill_md_blob
         .clone()
@@ -236,10 +236,15 @@ fn acknowledge_skill_compat_with_root(
 }
 
 /// Summaries for a skill in `<data_root>/library`, for every tool it may not
-/// suit. The marks are read from that same data root, so tests stay isolated.
+/// suit. A tool with its own version of the skill is judged by that version.
+/// The marks are read from that same data root, so tests stay isolated.
 pub fn library_skill_summaries(skill_dir: &Path) -> Vec<CompatSummary> {
-    let inspection = inspect(skill_dir);
-    if inspection.features.is_empty() {
+    let library_version = inspect(skill_dir);
+    let variants: BTreeMap<&str, Inspection> = targets::TOOLS
+        .iter()
+        .filter_map(|(target_id, _, _)| Some((*target_id, inspect(&crate::variants::variant_for(skill_dir, target_id)?))))
+        .collect();
+    if library_version.features.is_empty() && variants.values().all(|inspection| inspection.features.is_empty()) {
         return Vec::new();
     }
     let acks = skill_dir
@@ -250,6 +255,7 @@ pub fn library_skill_summaries(skill_dir: &Path) -> Vec<CompatSummary> {
     targets::TOOLS
         .iter()
         .filter_map(|(target_id, target_name, _)| {
+            let inspection = variants.get(target_id).unwrap_or(&library_version);
             let report = inspection.report(target_id, target_name, false);
             let first = report.findings.first()?.clone();
             Some(CompatSummary {
@@ -257,7 +263,7 @@ pub fn library_skill_summaries(skill_dir: &Path) -> Vec<CompatSummary> {
                 level: report.level,
                 count: report.findings.len(),
                 first,
-                acknowledged: is_acknowledged(&acks, skill_dir, target_id, &inspection),
+                acknowledged: is_acknowledged(&acks, skill_dir, target_id, inspection),
             })
         })
         .collect()
@@ -322,7 +328,7 @@ fn inspect(skill_dir: &Path) -> Inspection {
         let text = text.strip_prefix('\u{feff}').unwrap_or(&text);
         let lines: Vec<&str> = text.lines().collect();
         let body_start = inspect_frontmatter(skill_dir, &lines, &mut inspection, &mut seen);
-        inspect_wrapper(skill_dir, &lines, body_start, &mut inspection);
+        inspect_wrapper(skill_dir, text, &lines, &mut inspection);
         inspect_text("SKILL.md", &lines, body_start, false, &mut inspection, &mut seen);
     }
 
@@ -439,30 +445,46 @@ fn inspect_declared(
     }
 }
 
-fn inspect_wrapper(skill_dir: &Path, lines: &[&str], body_start: usize, inspection: &mut Inspection) {
+fn inspect_wrapper(skill_dir: &Path, text: &str, lines: &[&str], inspection: &mut Inspection) {
+    let Some((reference, line)) = wrapper_reference(text, |reference| skill_dir.join(reference).is_file()) else {
+        return;
+    };
+    let excerpt = lines.get(line - 1).copied().unwrap_or("");
+    inspection.features.push(Feature {
+        finding: finding("wrapper", CompatLevel::Incompatible, &reference, "SKILL.md", Some(line), excerpt),
+        owners: Vec::new(),
+    });
+}
+
+/// For a wrapper SKILL.md (a short body pointing at a SKILL.md that
+/// `exists_inside` says is not part of the skill): that path and its line.
+pub(crate) fn wrapper_reference(text: &str, exists_inside: impl Fn(&str) -> bool) -> Option<(String, usize)> {
+    let text = text.strip_prefix('\u{feff}').unwrap_or(text);
+    let lines: Vec<&str> = text.lines().collect();
+    let body_start = frontmatter_end(&lines);
     let body = lines.get(body_start..).unwrap_or(&[]);
     let length: usize = body.iter().map(|line| line.trim().chars().count()).sum();
     if length >= WRAPPER_MAX_BODY_CHARS {
-        return;
+        return None;
     }
-    for (offset, line) in body.iter().enumerate() {
-        for reference in skill_md_references(line) {
-            if !skill_dir.join(&reference).is_file() {
-                inspection.features.push(Feature {
-                    finding: finding(
-                        "wrapper",
-                        CompatLevel::Incompatible,
-                        &reference,
-                        "SKILL.md",
-                        Some(body_start + offset + 1),
-                        line,
-                    ),
-                    owners: Vec::new(),
-                });
-                return;
-            }
-        }
+    body.iter().enumerate().find_map(|(offset, line)| {
+        skill_md_references(line)
+            .into_iter()
+            .find(|reference| !exists_inside(reference))
+            .map(|reference| (reference, body_start + offset + 1))
+    })
+}
+
+/// Index of the first line after the frontmatter (0 when there is none).
+fn frontmatter_end(lines: &[&str]) -> usize {
+    if lines.first().map(|line| line.trim_end()) != Some("---") {
+        return 0;
     }
+    lines
+        .iter()
+        .skip(1)
+        .position(|line| line.trim_end() == "---")
+        .map_or(0, |end| end + 2)
 }
 
 /// Paths to another SKILL.md in a line, e.g. `.agents/skills/dev/SKILL.md`.
@@ -825,6 +847,21 @@ mod tests {
 
         fs::write(dir.join("SKILL.md"), "---\nname: review\ndescription: x\n---\n\nUse TodoWrite a lot.\n").unwrap();
         assert!(!check_skill_compat_with_root(&dir, "codex", &root).unwrap().acknowledged);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn a_tool_with_its_own_version_is_judged_by_it() {
+        let root = test_temp_dir("compat-variant");
+        let dir = skill(&root, "review", "---\nname: review\ndescription: x\n---\n\nUse TodoWrite.\n");
+        let codex_version = root.join("variants").join("review").join("codex");
+        fs::create_dir_all(&codex_version).unwrap();
+        fs::write(codex_version.join("SKILL.md"), "---\nname: review\ndescription: x\n---\n\nKeep a plan.\n").unwrap();
+
+        let summaries = library_skill_summaries(&dir);
+        assert!(summaries.iter().all(|entry| entry.target_id != "codex"));
+        assert!(summaries.iter().any(|entry| entry.target_id == "gemini-cli"));
+        assert_eq!(check_skill_compat_with_root(&dir, "codex", &root).unwrap().level, CompatLevel::Compatible);
         let _ = fs::remove_dir_all(root);
     }
 

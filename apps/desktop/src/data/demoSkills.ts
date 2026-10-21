@@ -19,6 +19,7 @@ export const demoSkills: SkillRecord[] = [
     health: "healthy",
     targets: targets(true, true),
     supportFiles: ["SKILL.md", "references/checklist.md"],
+    variants: [{ targetId: "codex", path: ".agents/skills/代码审查" }],
   },
   ...["docx", "pdf", "xlsx"].map((name, index) => ({
     id: `demo-${name}`,

@@ -59,6 +59,8 @@ pub struct TargetToggleResult {
     pub changed: bool,
     pub target_path: String,
     pub message: String,
+    /// Enabled from the tool's own version of the skill: its repository folder.
+    pub variant: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -183,8 +185,12 @@ pub fn set_skill_target_enabled_with_options(
     let source_canonical = validate_library_source(source_path, data_root)?;
     let skill_name = skill_folder_name(source_path);
     let destination = target.root.join(&skill_name);
+    // The tool's own version of the skill when it has one; markers still name
+    // the library skill, so "managed" and "enabled" checks are unchanged.
+    let copy_from = crate::variants::effective_source(&source_canonical, target.id);
+    let variant = crate::variants::variant_label(&source_canonical, target.id);
 
-    if enabled {
+    let result = if enabled {
         // A same-named folder the user put there themselves: an identical copy
         // simply becomes the managed copy; a different one is only replaced on
         // explicit request (it goes to the trash, never deleted).
@@ -195,9 +201,9 @@ pub fn set_skill_target_enabled_with_options(
                 let trash_path = unique_trash_path(data_root, &format!("{}-{skill_name}-disabled", target.id))?;
                 fs::rename(&destination, &trash_path)
                     .map_err(|error| format!("Could not move the disabled copy to trash: {error}"))?;
-                return enable_target_copy(&source_canonical, source_path, &target, &destination, &skill_name);
+                return with_variant(enable_target_copy(&source_canonical, &copy_from, &target, &destination, &skill_name), variant);
             }
-            if same_skill_content(source_path, &destination) {
+            if same_skill_content(&copy_from, &destination) {
                 write_marker(&destination, &source_canonical, &target)?;
                 return Ok(TargetToggleResult {
                     target_id: target.id.to_string(),
@@ -207,6 +213,7 @@ pub fn set_skill_target_enabled_with_options(
                     changed: true,
                     target_path: display_path(&destination),
                     message: format!("{skill_name} was already in {}; it is now managed.", target.name),
+                    variant: None,
                 });
             }
             if replace_existing {
@@ -217,7 +224,7 @@ pub fn set_skill_target_enabled_with_options(
         }
         enable_target_copy(
             &source_canonical,
-            source_path,
+            &copy_from,
             &target,
             &destination,
             &skill_name,
@@ -225,12 +232,25 @@ pub fn set_skill_target_enabled_with_options(
     } else {
         disable_target_copy(
             &source_canonical,
+            &copy_from,
             data_root,
             &target,
             &destination,
             &skill_name,
         )
+    };
+    if enabled {
+        with_variant(result, variant)
+    } else {
+        result
     }
+}
+
+fn with_variant(
+    result: Result<TargetToggleResult, String>,
+    variant: Option<String>,
+) -> Result<TargetToggleResult, String> {
+    result.map(|result| TargetToggleResult { variant, ..result })
 }
 
 pub fn is_managed_target_copy(target_dir: &Path, source_path: &Path, target_id: &str) -> bool {
@@ -315,6 +335,7 @@ where
                 changed: false,
                 target_path: destination.display().to_string(),
                 message: format!("{skill_name} is already enabled for {}.", target.name),
+                variant: None,
             });
         }
 
@@ -348,6 +369,7 @@ where
                     changed: false,
                     target_path: destination.display().to_string(),
                     message: format!("{skill_name} is already enabled for {}.", target.name),
+                    variant: None,
                 });
             }
 
@@ -381,11 +403,13 @@ where
         changed: true,
         target_path: destination.display().to_string(),
         message: format!("Enabled {skill_name} for {}.", target.name),
+        variant: None,
     })
 }
 
 fn disable_target_copy(
     source_canonical: &Path,
+    copy_from: &Path,
     data_root: &Path,
     target: &TargetProfile,
     destination: &Path,
@@ -400,6 +424,7 @@ fn disable_target_copy(
             changed: false,
             target_path: destination.display().to_string(),
             message: format!("{skill_name} is already disabled for {}.", target.name),
+            variant: None,
         });
     }
 
@@ -413,13 +438,14 @@ fn disable_target_copy(
             changed: false,
             target_path: display_path(destination),
             message: format!("{skill_name} is already disabled for {}.", target.name),
+            variant: None,
         });
     }
 
     // An identical copy the user placed there is safe to move to the trash:
     // the library still holds the same files.
     if !marker_matches(destination, source_canonical, target.id)
-        && !same_skill_content(source_canonical, destination)
+        && !same_skill_content(copy_from, destination)
     {
         return Err(format!(
             "Target folder exists with different content and is not managed by Skills Manage: {}",
@@ -439,6 +465,7 @@ fn disable_target_copy(
         changed: true,
         target_path: destination.display().to_string(),
         message: format!("Disabled {skill_name} for {}.", target.name),
+        variant: None,
     })
 }
 
@@ -707,8 +734,14 @@ pub fn remove_skill_from_library_with_roots(
     }
 
     let trash_path = unique_trash_path(data_root, &format!("library-{skill_name}"))?;
+    let library_folder = source_canonical
+        .file_name()
+        .map(|name| name.to_string_lossy().to_string())
+        .unwrap_or_else(|| skill_name.clone());
     fs::rename(&source_canonical, &trash_path)
         .map_err(|error| format!("Could not move the skill to trash: {error}"))?;
+    // Best effort: the skill itself is already gone from the library.
+    let _ = crate::variants::trash_variants(data_root, &library_folder);
 
     Ok(RemoveResult {
         message: format!("Moved {skill_name} to trash."),
@@ -723,6 +756,42 @@ mod tests {
     use crate::fs_ops::test_temp_dir as unique_temp_dir;
     use std::fs;
     use std::path::PathBuf;
+
+    #[test]
+    fn a_tool_with_its_own_version_gets_that_version() {
+        let data_root = unique_temp_dir("data-root-variant-enable");
+        let library_skill = create_library_skill(&data_root, "dev");
+        let codex_version = data_root.join("variants").join("dev").join("codex");
+        fs::create_dir_all(&codex_version).unwrap();
+        fs::write(codex_version.join("SKILL.md"), "---\nname: dev\ndescription: Codex\n---\nCodex version\n").unwrap();
+        fs::write(
+            library_skill.join(crate::fs_ops::SOURCE_MARKER_FILE),
+            r#"{"variants":{"codex":".agents/skills/dev"}}"#,
+        )
+        .unwrap();
+        let codex_root = unique_temp_dir("variant-enable-codex");
+        let claude_root = unique_temp_dir("variant-enable-claude");
+
+        let codex = set_skill_target_enabled_with_root(&library_skill, "codex", true, &data_root, &codex_root).unwrap();
+        assert_eq!(codex.variant.as_deref(), Some(".agents/skills/dev"));
+        let copied = fs::read_to_string(codex_root.join("dev").join("SKILL.md")).unwrap();
+        assert!(copied.contains("Codex version"));
+        assert!(is_managed_target_copy(&codex_root.join("dev"), &library_skill, "codex"));
+
+        let claude = set_skill_target_enabled_with_root(&library_skill, "claude-code", true, &data_root, &claude_root).unwrap();
+        assert_eq!(claude.variant, None);
+        assert!(!fs::read_to_string(claude_root.join("dev").join("SKILL.md")).unwrap().contains("Codex version"));
+
+        // Disabling and removing leave nothing behind, versions included.
+        let disabled = set_skill_target_enabled_with_root(&library_skill, "codex", false, &data_root, &codex_root).unwrap();
+        assert!(disabled.changed);
+        remove_skill_from_library_with_roots(&library_skill, &data_root, &[("claude-code", claude_root.clone())]).unwrap();
+        assert!(!data_root.join("variants").join("dev").exists());
+
+        for dir in [data_root, codex_root, claude_root] {
+            let _ = fs::remove_dir_all(dir);
+        }
+    }
 
     #[test]
     fn enables_shared_library_skill_as_managed_copy() {

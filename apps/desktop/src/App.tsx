@@ -226,10 +226,14 @@ function App() {
     setBusyKey(`${skill.sourcePath}:${toolId}`);
     setNotice(null);
     try {
-      await api.setTarget(skill.sourcePath, toolId, enable);
+      const result = await api.setTarget(skill.sourcePath, toolId, enable);
+      const names = { skill: skill.name, tool: toolName(toolId) };
       setNotice({
         kind: "success",
-        text: t(enable ? "notice.enabled" : "notice.disabled", { skill: skill.name, tool: toolName(toolId) }),
+        text:
+          enable && result?.variant
+            ? t("notice.enabledVariant", { ...names, path: result.variant })
+            : t(enable ? "notice.enabled" : "notice.disabled", names),
       });
     } catch (error) {
       console.error("set_skill_target_enabled failed", error);

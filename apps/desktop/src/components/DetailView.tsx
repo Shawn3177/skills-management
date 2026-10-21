@@ -102,6 +102,21 @@ export function DetailView({ t, skill, home, busy, onOpenUrl, onOpenFolder, onEd
               <dd className="mono">{github.replace(/^https?:\/\//, "")}</dd>
             </>
           ) : null}
+          {skill.variants && skill.variants.length > 0 ? (
+            <>
+              <dt>{t("detail.variants")}</dt>
+              <dd className="detail-variants">
+                {skill.variants.map((variant) => (
+                  <span key={variant.targetId}>
+                    {t("detail.variantItem", {
+                      tool: tools.find((tool) => tool.id === variant.targetId)?.name ?? variant.targetId,
+                      path: variant.path,
+                    })}
+                  </span>
+                ))}
+              </dd>
+            </>
+          ) : null}
           <dt>{t("detail.files")}</dt>
           <dd className="detail-files">
             {skill.supportFiles.map((file) => (
