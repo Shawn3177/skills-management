@@ -1,21 +1,34 @@
-import { Check, ChevronRight, ExternalLink, FolderGit2, FolderOpen, Link2, Pencil, Search, Unlink } from "lucide-react";
+import {
+  ChevronRight,
+  FolderGit2,
+  FolderOpen,
+  FolderPlus,
+  Link2,
+  ListPlus,
+  Pencil,
+  RefreshCw,
+  Search,
+  Star,
+  Unlink,
+} from "lucide-react";
 import { useState, type FormEvent, type ReactNode } from "react";
 import type { TFunction } from "../i18n/useLocale";
 import type { SkillUpdateStatus } from "../lib/api";
 import {
+  allTools,
   enabledCount,
+  folderName,
   githubSource,
   groupBySeries,
   hasConflictIn,
   isEnabledIn,
-  sourceLine,
   tildePath,
   tools,
   type SkillRecord,
   type SkillSeries,
   type ToolId,
 } from "../lib/skills";
-import { SkillTile, ToolMark } from "./ui";
+import { GithubButton, SkillTile, ToolLogo } from "./ui";
 
 export type Tab = "all" | ToolId;
 export type ScanState = "scanning" | "ready" | "preview" | "error";
@@ -33,6 +46,8 @@ type Props = {
   busyKey: string | null;
   onToggle: (skill: SkillRecord, toolId: ToolId, enable: boolean) => void;
   onOpen: (skill: SkillRecord) => void;
+  /** Show a skill's details (its description and SKILL.md). */
+  onShowDetail: (skill: SkillRecord) => void;
   onOpenFolder: (path: string) => void;
   onOpenUrl: (url: string) => void;
   onAddToLibrary: (skill: SkillRecord) => void;
@@ -40,16 +55,26 @@ type Props = {
   onConflict: (skill: SkillRecord, toolId: ToolId) => void;
   /** Group installed skills under a GitHub repository; resolves true on success. */
   onLinkSeries: (url: string) => Promise<boolean>;
+  /** Look up unknown skill sources on GitHub; resolves true when it ran. */
+  onFindSources: () => Promise<boolean>;
+  /** Lower-cased `owner/repo` of every repository the connected account starred. */
+  starred: Set<string>;
   onUnlinkSeries: (repository: string) => void;
+  /** Add these tool-folder skills to the shared library (one per folder name). */
+  onAddAllToLibrary: (skills: SkillRecord[]) => void;
   /** The user's home folder, to show paths as `~/…`. */
   home: string | null;
 };
 
 export function MainView(props: Props) {
   const { t, tab, library, visibleLibrary, locals, query, onQueryChange, scanState } = props;
-  const currentTool = tools.find((tool) => tool.id === tab);
+  const currentTool = allTools.find((tool) => tool.id === tab);
   const summary = currentTool
-    ? t("summary.tool", { total: library.length, tool: currentTool.name, count: enabledCount(library, currentTool.id) })
+    ? t("summary.tool", {
+        total: library.length,
+        tool: currentTool.name,
+        count: enabledCount(library, currentTool.id),
+      })
     : t("summary.all", {
         total: library.length,
         tools: tools.length,
@@ -72,6 +97,15 @@ export function MainView(props: Props) {
   const searching = query.trim() !== "";
   const libraryGroups = groupBySeries(visibleLibrary);
   const localGroups = groupBySeries(toolLocals);
+  const unsourced = toolLocals.filter((skill) => !githubSource(skill)).length;
+  // Repositories grouped only because they were linked (the user can undo that).
+  const linkedRepositories = [
+    ...new Set(
+      groupBySeries([...library, ...locals])
+        .series.filter((series) => series.linked)
+        .map((series) => series.repository),
+    ),
+  ];
 
   function toggleSeries(key: string) {
     setExpanded((current) => {
@@ -84,7 +118,12 @@ export function MainView(props: Props) {
     });
   }
 
-  function renderSeries(series: SkillSeries, scope: string, summaryText: string, card: (skill: SkillRecord) => ReactNode) {
+  function renderSeries(
+    series: SkillSeries,
+    scope: string,
+    card: (skill: SkillRecord) => ReactNode,
+    action: ReactNode = null,
+  ) {
     const key = `${scope}:${series.key}`;
     return (
       <SeriesGroup
@@ -92,13 +131,12 @@ export function MainView(props: Props) {
         id={key}
         t={t}
         series={series}
-        summary={summaryText}
         open={searching || expanded.has(key)}
+        starred={props.starred.has(series.key)}
         canToggle={!searching}
-        busy={props.busyKey !== null}
         onToggle={() => toggleSeries(key)}
         onOpenUrl={props.onOpenUrl}
-        onUnlink={props.onUnlinkSeries}
+        action={action}
       >
         {series.skills.map(card)}
       </SeriesGroup>
@@ -135,27 +173,37 @@ export function MainView(props: Props) {
       </div>
 
       {linking ? (
-        <LinkSeriesPanel
+        <SourcesPanel
           t={t}
           busy={props.busyKey !== null}
           onCancel={() => setLinking(false)}
-          onSubmit={async (url) => {
+          onFind={async () => {
+            if (await props.onFindSources()) {
+              setLinking(false);
+            }
+          }}
+          onLink={async (url) => {
             if (await props.onLinkSeries(url)) {
               setLinking(false);
             }
           }}
+          linked={linkedRepositories}
+          onUnlink={props.onUnlinkSeries}
         />
       ) : null}
 
       {scanNote ? (
-        <p className={`scan-note ${scanState === "error" ? "error" : ""}`} role={scanState === "error" ? "alert" : "status"}>
+        <p
+          className={`scan-note ${scanState === "error" ? "error" : ""}`}
+          role={scanState === "error" ? "alert" : "status"}
+        >
           {scanNote}
         </p>
       ) : null}
 
       <section className="card-list" aria-label={t("nav.skills")}>
         {libraryGroups.series.map((series) =>
-          renderSeries(series, "library", seriesSummary(t, series, currentTool), libraryCard),
+          renderSeries(series, "library", libraryCard),
         )}
         {libraryGroups.singles.map(libraryCard)}
         {visibleLibrary.length === 0 && scanState !== "scanning" ? (
@@ -167,12 +215,49 @@ export function MainView(props: Props) {
       </section>
 
       {toolLocals.length > 0 ? (
-        <section className="card-list" aria-label={currentTool ? t("locals.headingTool", { tool: currentTool.name }) : t("locals.headingAll")}>
+        <section
+          className="card-list"
+          aria-label={currentTool ? t("locals.headingTool", { tool: currentTool.name }) : t("locals.headingAll")}
+        >
           <div className="divider-label">
             <span>{currentTool ? t("locals.headingTool", { tool: currentTool.name }) : t("locals.headingAll")}</span>
+            {unsourced > 0 && !linking ? (
+              <button
+                type="button"
+                className="divider-action"
+                disabled={props.busyKey !== null}
+                onClick={() => void props.onFindSources()}
+              >
+                {props.busyKey === "series:find" ? t("series.finding") : t("series.unsourced", { count: unsourced })}
+              </button>
+            ) : null}
+            <AddAllButton
+              t={t}
+              skills={toolLocals}
+              busy={props.busyKey !== null}
+              working={props.busyKey === "locals:add-all"}
+              onConfirm={props.onAddAllToLibrary}
+            />
           </div>
           {localGroups.series.map((series) =>
-            renderSeries(series, "local", series.url.replace(/^https?:\/\//, ""), localCard),
+            renderSeries(
+              series,
+              "local",
+              localCard,
+              <span className="series-actions">
+                <PlatformBadges t={t} name={series.repository} sources={series.skills.map((skill) => skill.source)} />
+                <button
+                  type="button"
+                  className="icon-button add-icon"
+                  aria-label={t("locals.addSeries", { repo: series.repository })}
+                  title={t("locals.addSeries", { repo: series.repository })}
+                  disabled={props.busyKey !== null}
+                  onClick={() => props.onAddAllToLibrary(series.skills)}
+                >
+                  <FolderPlus size={16} strokeWidth={1.9} aria-hidden="true" />
+                </button>
+              </span>,
+            ),
           )}
           {localGroups.singles.map(localCard)}
         </section>
@@ -201,38 +286,28 @@ function writeExpanded(keys: Set<string>) {
   }
 }
 
-/** "12 · Claude Code 3/12 · Codex 5/12", or just the current tool's count. */
-function seriesSummary(t: TFunction, series: SkillSeries, currentTool: (typeof tools)[number] | undefined): string {
-  const total = series.skills.length;
-  const parts = (currentTool ? [currentTool] : tools).map((tool) =>
-    t("series.enabledIn", { tool: tool.name, count: enabledCount(series.skills, tool.id), total }),
-  );
-  return parts.join(" · ");
-}
-
 function SeriesGroup({
   id,
   t,
   series,
-  summary,
   open,
+  starred,
   canToggle,
-  busy,
   onToggle,
   onOpenUrl,
-  onUnlink,
+  action,
   children,
 }: {
   id: string;
   t: TFunction;
   series: SkillSeries;
-  summary: string;
   open: boolean;
+  starred: boolean;
   canToggle: boolean;
-  busy: boolean;
   onToggle: () => void;
   onOpenUrl: (url: string) => void;
-  onUnlink: (repository: string) => void;
+  /** Button on the right (e.g. add the whole series to the library). */
+  action: ReactNode;
   children: ReactNode;
 }) {
   const listId = `series-${id.replace(/[^a-zA-Z0-9-]/g, "-")}`;
@@ -241,10 +316,12 @@ function SeriesGroup({
       <div className="series-head">
         <button
           type="button"
-          className="series-toggle"
+          className="series-toggle compact"
           aria-expanded={open}
           aria-controls={open ? listId : undefined}
-          aria-label={t(open ? "series.collapse" : "series.expand", { repo: series.repository })}
+          aria-label={t(open ? "series.collapse" : "series.expand", {
+            repo: series.repository,
+          })}
           disabled={!canToggle}
           onClick={onToggle}
         >
@@ -252,36 +329,24 @@ function SeriesGroup({
           <span className="series-tile" aria-hidden="true">
             <FolderGit2 size={17} strokeWidth={1.9} />
           </span>
-          <span className="card-main">
-            <span className="card-title">
-              <strong>{series.repository}</strong>
-              <span className="tag neutral">{t("series.count", { count: series.skills.length })}</span>
-            </span>
-            <span className="card-sub">{summary}</span>
+        </button>
+        <span className="card-main">
+          <span className="card-title">
+            <button type="button" className="name-button" tabIndex={-1} disabled={!canToggle} onClick={onToggle}>
+              {series.repository}
+            </button>
+            {series.byPrefix ? <span className="muted small">{t("series.byPrefixShort")}</span> : null}
+            {starred ? (
+              <Star className="star-mark" size={13} strokeWidth={2.2} aria-label={t("mine.starred")} role="img" />
+            ) : null}
+            <span className="tag neutral">{t("series.count", { count: series.skills.length })}</span>
           </span>
-        </button>
-        {series.linked ? (
-          <button
-            type="button"
-            className="icon-button"
-            aria-label={t("series.unlink", { repo: series.repository })}
-            title={t("series.unlink", { repo: series.repository })}
-            disabled={busy}
-            onClick={() => onUnlink(series.repository)}
-          >
-            <Unlink size={15} strokeWidth={1.9} aria-hidden="true" />
-          </button>
-        ) : null}
-        <button
-          type="button"
-          className="button outline small"
-          aria-label={t("series.openGithubLabel", { repo: series.repository })}
-          title={series.url}
-          onClick={() => onOpenUrl(series.url)}
-        >
-          <ExternalLink size={13} strokeWidth={2} aria-hidden="true" />
-          {t("series.openGithub")}
-        </button>
+          
+        </span>
+        {series.byPrefix ? null : (
+          <GithubButton t={t} name={series.repository} url={series.url} onOpenUrl={onOpenUrl} />
+        )}
+        {action}
       </div>
       {open ? (
         <div className="series-members" id={listId}>
@@ -292,97 +357,235 @@ function SeriesGroup({
   );
 }
 
-function LinkSeriesPanel({
+function SourcesPanel({
   t,
   busy,
   onCancel,
-  onSubmit,
+  onFind,
+  onLink,
+  linked,
+  onUnlink,
 }: {
   t: TFunction;
   busy: boolean;
   onCancel: () => void;
-  onSubmit: (url: string) => Promise<void>;
+  onFind: () => Promise<void>;
+  onLink: (url: string) => Promise<void>;
+  linked: string[];
+  onUnlink: (repository: string) => void;
 }) {
   const [url, setUrl] = useState("");
-  const [pending, setPending] = useState(false);
+  const [pending, setPending] = useState<"find" | "link" | null>(null);
 
-  async function submit(event: FormEvent) {
-    event.preventDefault();
-    if (!url.trim() || pending) {
-      return;
-    }
-    setPending(true);
+  async function run(kind: "find" | "link", action: () => Promise<void>) {
+    setPending(kind);
     try {
-      await onSubmit(url.trim());
+      await action();
     } finally {
-      setPending(false);
+      setPending(null);
+    }
+  }
+
+  function submit(event: FormEvent) {
+    event.preventDefault();
+    if (url.trim() && !pending) {
+      void run("link", () => onLink(url.trim()));
     }
   }
 
   return (
-    <form className="link-panel" aria-label={t("series.linkTitle")} onSubmit={(event) => void submit(event)}>
-      <strong>{t("series.linkTitle")}</strong>
-      <span className="field-hint">{t("series.linkHint")}</span>
-      <div className="link-row">
-        <input
-          className="text-input mono"
-          type="url"
-          aria-label={t("series.linkTitle")}
-          placeholder={t("series.linkPlaceholder")}
-          value={url}
-          autoFocus
-          onChange={(event) => setUrl(event.currentTarget.value)}
-          onKeyDown={(event) => {
-            if (event.key === "Escape") {
-              onCancel();
-            }
-          }}
-        />
-        <button type="button" className="button ghost" onClick={onCancel}>
+    <div
+      className="link-panel"
+      role="region"
+      aria-label={t("series.panelTitle")}
+      onKeyDown={(event) => {
+        if (event.key === "Escape") {
+          onCancel();
+        }
+      }}
+    >
+      <div className="link-panel-head">
+        <strong>{t("series.panelTitle")}</strong>
+        <button type="button" className="button ghost small" onClick={onCancel}>
           {t("actions.cancel")}
         </button>
-        <button type="submit" className="button primary" disabled={!url.trim() || pending || busy}>
-          {pending ? t("series.linking") : t("series.linkSubmit")}
+      </div>
+      <span className="field-hint">{t("series.findHint")}</span>
+      <div className="link-row">
+        <button
+          type="button"
+          className="button primary"
+          autoFocus
+          disabled={pending !== null || busy}
+          onClick={() => void run("find", onFind)}
+        >
+          <Search size={14} strokeWidth={2} aria-hidden="true" />
+          {pending === "find" ? t("series.finding") : t("series.findButton")}
         </button>
       </div>
-    </form>
+
+      <form className="link-manual" onSubmit={submit}>
+        <span className="field-hint">
+          {t("series.manualHeading")} · {t("series.linkHint")}
+        </span>
+        <div className="link-row">
+          <input
+            className="text-input mono"
+            type="url"
+            aria-label={t("series.linkTitle")}
+            placeholder={t("series.linkPlaceholder")}
+            value={url}
+            onChange={(event) => setUrl(event.currentTarget.value)}
+          />
+          <button type="submit" className="button outline" disabled={!url.trim() || pending !== null || busy}>
+            {pending === "link" ? t("series.linking") : t("series.linkSubmit")}
+          </button>
+        </div>
+      </form>
+
+      {linked.length > 0 ? (
+        <div className="link-manual">
+          <span className="field-hint">{t("series.linkedList")}</span>
+          <div className="chip-row">
+            {linked.map((repository) => (
+              <span className="linked-chip" key={repository}>
+                {repository}
+                <button
+                  type="button"
+                  className="icon-button tiny"
+                  aria-label={t("series.unlink", { repo: repository })}
+                  title={t("series.unlink", { repo: repository })}
+                  disabled={busy}
+                  onClick={() => onUnlink(repository)}
+                >
+                  <Unlink size={12} strokeWidth={2} aria-hidden="true" />
+                </button>
+              </span>
+            ))}
+          </div>
+        </div>
+      ) : null}
+    </div>
   );
 }
 
-function LocalCard({ t, skill, busyKey, onAddToLibrary, onOpenUrl, home }: Props & { skill: SkillRecord }) {
+/** The tools a skill (or a series) currently lives in, as bare logos. */
+function PlatformBadges({ t, name, sources }: { t: TFunction; name: string; sources: string[] }) {
+  const unique = [...new Set(sources)];
+  const known = tools.filter((tool) => unique.includes(tool.sourceLabel));
+  const others = unique.filter((source) => !tools.some((tool) => tool.sourceLabel === source));
+  const names = [...known.map((tool) => tool.name), ...others];
+  return (
+    <span className="platform-icons" role="img" aria-label={t("locals.inTools", { skill: name, tools: names.join(", ") })}>
+      {known.map((tool) => (
+        <span key={tool.id} title={tool.name}>
+          <ToolLogo id={tool.id} />
+        </span>
+      ))}
+      {others.map((source) => (
+        <span className="tag neutral" key={source}>
+          {source}
+        </span>
+      ))}
+    </span>
+  );
+}
+
+/** "Add all to the shared library", asking once before copying many skills. */
+function AddAllButton({
+  t,
+  skills,
+  busy,
+  working,
+  onConfirm,
+}: {
+  t: TFunction;
+  skills: SkillRecord[];
+  busy: boolean;
+  working: boolean;
+  onConfirm: (skills: SkillRecord[]) => void;
+}) {
+  const [asking, setAsking] = useState(false);
+  const count = new Set(skills.map((skill) => folderName(skill.sourcePath).toLowerCase())).size;
+  if (count === 0) {
+    return null;
+  }
+  if (asking) {
+    return (
+      <span className="confirm-group add-all">
+        <span className="small">{t("locals.addAllAsk", { count })}</span>
+        <button type="button" className="button small ghost" onClick={() => setAsking(false)}>
+          {t("actions.cancel")}
+        </button>
+        <button
+          type="button"
+          className="button small primary"
+          disabled={busy}
+          onClick={() => {
+            setAsking(false);
+            onConfirm(skills);
+          }}
+        >
+          {t("locals.addAllConfirm", { count })}
+        </button>
+      </span>
+    );
+  }
+  return (
+    <button
+      type="button"
+      className="icon-button add-icon add-all"
+      aria-label={t("locals.addAll")}
+      title={t("locals.addAll")}
+      disabled={busy}
+      onClick={() => setAsking(true)}
+    >
+      {working ? (
+        <RefreshCw className="spin" size={15} strokeWidth={2} aria-hidden="true" />
+      ) : (
+        <ListPlus size={16} strokeWidth={1.9} aria-hidden="true" />
+      )}
+    </button>
+  );
+}
+
+/** A click on a card's empty space opens the skill; its buttons keep their own job. */
+function openOnCardClick(event: { target: EventTarget }, open: () => void) {
+  if (!(event.target instanceof Element) || !event.target.closest("button, a, input, label")) {
+    open();
+  }
+}
+
+function LocalCard({ t, skill, busyKey, onAddToLibrary, onOpenUrl, onShowDetail, home }: Props & { skill: SkillRecord }) {
   const github = githubSource(skill);
   return (
-    <article className="skill-card local">
+    <article className="skill-card local clickable" onClick={(event) => openOnCardClick(event, () => onShowDetail(skill))}>
       <SkillTile name={skill.name} muted />
       <div className="card-main">
         <span className="card-title">
-          <strong>{skill.name}</strong>
-          <span className="tag neutral">{t("locals.onlyIn", { tool: skill.source })}</span>
+          <button type="button" className="name-button" onClick={() => onShowDetail(skill)}>
+            {skill.name}
+          </button>
         </span>
-        {github ? (
-          <a
-            className="card-sub link"
-            href={github}
-            title={tildePath(skill.sourcePath, home)}
-            onClick={(event) => {
-              event.preventDefault();
-              onOpenUrl(github);
-            }}
-          >
-            {github.replace(/^https?:\/\//, "")}
-          </a>
-        ) : (
-          <span className="card-sub">{tildePath(skill.sourcePath, home)}</span>
-        )}
+        <span className="card-sub" title={tildePath(skill.sourcePath, home)}>
+          {skill.description}
+        </span>
       </div>
+      {github ? (
+        <span className="hover-actions">
+          <GithubButton t={t} name={skill.name} url={github} onOpenUrl={onOpenUrl} />
+        </span>
+      ) : null}
+      <PlatformBadges t={t} name={skill.name} sources={[skill.source]} />
       <button
         type="button"
-        className="button outline"
+        className="icon-button add-icon"
         aria-label={t("actions.addSkillToLibrary", { skill: skill.name })}
+        title={t("actions.addToLibrary")}
         disabled={busyKey !== null}
         onClick={() => onAddToLibrary(skill)}
       >
-        {t("actions.addToLibrary")}
+        <FolderPlus size={16} strokeWidth={1.9} aria-hidden="true" />
       </button>
     </article>
   );
@@ -399,23 +602,26 @@ function SkillCard({
   onOpenFolder,
   onOpenUrl,
   onConflict,
-  home,
+  onShowDetail,
 }: Props & { skill: SkillRecord }) {
   const broken = skill.health === "broken";
+  const github = githubSource(skill);
   const update = updates.get(skill.sourcePath);
-  const source = sourceLine(skill, home);
   const issues = skill.issues ?? [];
-  const currentTool = tools.find((tool) => tool.id === tab);
+  const currentTool = allTools.find((tool) => tool.id === tab);
   const enabledHere = currentTool ? isEnabledIn(skill, currentTool.id) : false;
   const conflictHere = currentTool ? hasConflictIn(skill, currentTool.id) : false;
   const busy = busyKey !== null;
 
   return (
-    <article className={`skill-card ${broken ? "broken" : ""}`}>
+    <article
+      className={`skill-card clickable ${broken ? "broken" : ""}`}
+      onClick={(event) => openOnCardClick(event, () => onShowDetail(skill))}
+    >
       <SkillTile name={skill.name} />
       <div className="card-main">
         <span className="card-title">
-          <button type="button" className="name-button" onClick={() => onOpen(skill)}>
+          <button type="button" className="name-button" onClick={() => onShowDetail(skill)}>
             {skill.name}
           </button>
           {enabledHere ? <span className="tag success">{t("card.enabled")}</span> : null}
@@ -430,29 +636,13 @@ function SkillCard({
         </span>
         {broken ? (
           <span className="card-sub problem">{t("card.broken")}</span>
-        ) : source.kind === "github" ? (
-          <a
-            className="card-sub link"
-            href={source.url}
-            onClick={(event) => {
-              event.preventDefault();
-              onOpenUrl(source.url);
-            }}
-          >
-            {source.text}
-          </a>
         ) : (
-          <button type="button" className="card-sub link as-text" onClick={() => onOpen(skill)}>
-            {source.kind === "local"
-              ? t("card.originLocal", { path: source.path })
-              : source.kind === "skillpack"
-                ? t("card.originPack", { name: source.name })
-                : t("card.libraryPath", { path: source.folder })}
-          </button>
+          <span className="card-sub">{skill.description}</span>
         )}
       </div>
 
       <span className="hover-actions">
+        {github ? <GithubButton t={t} name={skill.name} url={github} onOpenUrl={onOpenUrl} /> : null}
         <button
           type="button"
           className="icon-button"
@@ -477,7 +667,10 @@ function SkillCard({
         <button
           type="button"
           className="button conflict toggle-button"
-          aria-label={t("actions.resolveConflict", { skill: skill.name, tool: currentTool.name })}
+          aria-label={t("actions.resolveConflict", {
+            skill: skill.name,
+            tool: currentTool.name,
+          })}
           disabled={busy}
           onClick={() => onConflict(skill, currentTool.id)}
         >
@@ -490,7 +683,10 @@ function SkillCard({
           aria-label={
             broken
               ? t("actions.needsFix", { skill: skill.name })
-              : t(enabledHere ? "actions.disableIn" : "actions.enableIn", { skill: skill.name, tool: currentTool.name })
+              : t(enabledHere ? "actions.disableIn" : "actions.enableIn", {
+                  skill: skill.name,
+                  tool: currentTool.name,
+                })
           }
           disabled={broken || busy}
           onClick={() => onToggle(skill, currentTool.id, !enabledHere)}
@@ -506,13 +702,17 @@ function SkillCard({
                 <button
                   type="button"
                   key={tool.id}
-                  className="tool-pill conflict"
-                  aria-label={t("actions.resolveConflict", { skill: skill.name, tool: tool.name })}
+                  className="tool-pill icon conflict"
+                  title={t("card.conflict", { tool: tool.name })}
+                  aria-label={t("actions.resolveConflict", {
+                    skill: skill.name,
+                    tool: tool.name,
+                  })}
                   disabled={busy}
                   onClick={() => onConflict(skill, tool.id)}
                 >
-                  <ToolMark mono={tool.mono} color="#d97706" round />
-                  {t("card.conflict", { tool: tool.name })}
+                  <ToolLogo id={tool.id} />
+                  <span className="conflict-dot" aria-hidden="true" />
                 </button>
               );
             }
@@ -520,19 +720,21 @@ function SkillCard({
               <button
                 type="button"
                 key={tool.id}
-                className={`tool-pill ${on && !broken ? "on" : ""}`}
+                className={`tool-pill icon ${on && !broken ? "on" : ""}`}
+                title={tool.name}
                 aria-pressed={on}
                 aria-label={
                   broken
                     ? t("actions.needsFix", { skill: skill.name })
-                    : t(on ? "actions.disableIn" : "actions.enableIn", { skill: skill.name, tool: tool.name })
+                    : t(on ? "actions.disableIn" : "actions.enableIn", {
+                        skill: skill.name,
+                        tool: tool.name,
+                      })
                 }
                 disabled={broken || busy}
                 onClick={() => onToggle(skill, tool.id, !on)}
               >
-                <ToolMark mono={tool.mono} color={on && !broken ? tool.color : "#cbd0d6"} round />
-                {tool.name}
-                <Check className="pill-check" size={12} strokeWidth={3} aria-hidden="true" />
+                <ToolLogo id={tool.id} dim={!on || broken} />
               </button>
             );
           })}

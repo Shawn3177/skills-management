@@ -8,6 +8,8 @@ export type AppStatus = {
   safeWriteMode: string;
   githubTokenConfigured: boolean;
   homeDir: string;
+  /** Tool ids whose config folder exists on this computer. */
+  installedTools?: string[];
 };
 
 export type ImportResult = {
@@ -40,7 +42,58 @@ export type LinkSeriesResult = {
   truncated: boolean;
 };
 
-export type ImportPackResult ={ imported: number; skillCount: number; libraryPaths: string[] };
+export type FindSourcesResult = {
+  found: Array<{ folder: string; repository: string; url: string; exact: boolean }>;
+  unmatched: string[];
+  ambiguous: string[];
+  repositories: string[];
+  failed: string[];
+  rateLimited: boolean;
+};
+
+export type GithubAccount = {
+  connected: boolean;
+  /** Missing while connected means the token no longer works. */
+  login: string | null;
+  name: string | null;
+  source: "stored" | "environment" | null;
+};
+
+export type CatalogSkill = { folder: string; path: string; url: string; blob: string };
+
+export type CatalogRepo = {
+  fullName: string;
+  description: string | null;
+  htmlUrl: string;
+  defaultBranch: string;
+  owned: boolean;
+  starred: boolean;
+  fork: boolean;
+  stars: number;
+  skills: CatalogSkill[];
+  private?: boolean;
+  language?: string | null;
+  pushedAt?: string | null;
+};
+
+/** The connected account's own and starred repositories that hold skills. */
+export type GithubCatalog = {
+  login: string;
+  name?: string | null;
+  avatarUrl?: string | null;
+  fetchedAt: number;
+  repos: CatalogRepo[];
+  starred: string[];
+  scanned: number;
+  rateLimited: boolean;
+};
+
+export type BatchImportResult = {
+  imported: Array<{ skillName: string; libraryPath: string; url: string }>;
+  failed: Array<{ url: string; error: string }>;
+};
+
+export type ImportPackResult = { imported: number; skillCount: number; libraryPaths: string[] };
 
 export type UpdateState =
   | "up-to-date"
@@ -84,6 +137,14 @@ export const api = {
   removeFromLibrary: (libraryPath: string) => invoke<RemoveResult>("remove_skill_from_library", { libraryPath }),
   importFromGithub: (url: string) => invoke<GithubImportResult>("import_from_github", { url }),
   linkSeries: (url: string) => invoke<LinkSeriesResult>("link_github_series", { url }),
+  importGithubSkills: (urls: string[]) => invoke<BatchImportResult>("import_github_skills", { urls }),
+  githubAccount: () => invoke<GithubAccount>("github_account"),
+  connectGithubToken: (token: string) => invoke<GithubAccount>("connect_github_token", { token }),
+  connectGithubCli: () => invoke<GithubAccount>("connect_github_cli"),
+  disconnectGithub: () => invoke<void>("disconnect_github"),
+  githubCatalog: (refresh: boolean) => invoke<GithubCatalog | null>("github_catalog", { refresh }),
+  readSkillMarkdown: (skillPath: string) => invoke<string>("read_skill_markdown", { skillPath }),
+  findSources: () => invoke<FindSourcesResult>("find_skill_sources"),
   unlinkSeries: (repository: string) => invoke<number>("unlink_github_series", { repository }),
   checkUpdates: () => invoke<SkillUpdateStatus[]>("check_skill_updates"),
   updateSkill: (libraryPath: string) => invoke<{ skillName: string }>("update_skill_from_github", { libraryPath }),

@@ -1,6 +1,7 @@
 import { RefreshCw } from "lucide-react";
 import type { TFunction } from "../i18n/useLocale";
 import type { SkillUpdateStatus, UpdateState } from "../lib/api";
+import { githubSource, type SkillRecord } from "../lib/skills";
 import { SkillTile } from "./ui";
 
 type Props = {
@@ -11,6 +12,10 @@ type Props = {
   checking: boolean;
   updatingPath: string | null;
   libraryCount: number;
+  /** Shared-library skills with a GitHub source (listed before the first check). */
+  sources: SkillRecord[];
+  /** Skills outside the library whose source is known. */
+  waiting: number;
   onCheck: () => void;
   onUpdate: (status: SkillUpdateStatus) => void;
   onExportAll: () => void;
@@ -28,7 +33,20 @@ const stateLabel: Record<
   error: "updates.error",
 };
 
-export function SyncView({ t, locale, updates, checkedAt, checking, updatingPath, libraryCount, onCheck, onUpdate, onExportAll }: Props) {
+export function SyncView({
+  t,
+  locale,
+  updates,
+  checkedAt,
+  checking,
+  updatingPath,
+  libraryCount,
+  sources,
+  waiting,
+  onCheck,
+  onUpdate,
+  onExportAll,
+}: Props) {
   return (
     <div className="page-body narrow">
       <section className="panel" aria-labelledby="updates-heading">
@@ -47,7 +65,21 @@ export function SyncView({ t, locale, updates, checkedAt, checking, updatingPath
           </button>
         </div>
 
-        {updates && updates.length === 0 ? <p className="field-hint">{t("updates.none")}</p> : null}
+        {(updates ?? sources).length === 0 ? <p className="field-hint">{t("updates.none")}</p> : null}
+        {!updates && sources.length > 0 ? (
+          <ul className="update-list">
+            {sources.map((skill) => (
+              <li key={skill.sourcePath} className="update-row">
+                <SkillTile name={skill.name} />
+                <span className="update-main">
+                  <strong>{skill.name}</strong>
+                  <span className="mono small muted">{(githubSource(skill) ?? "").replace(/^https?:\/\/github\.com\//, "")}</span>
+                </span>
+                <span className="muted small">{t("updates.notChecked")}</span>
+              </li>
+            ))}
+          </ul>
+        ) : null}
         {updates && updates.length > 0 ? (
           <ul className="update-list">
             {updates.map((status) => (
@@ -84,7 +116,10 @@ export function SyncView({ t, locale, updates, checkedAt, checking, updatingPath
             ))}
           </ul>
         ) : null}
-        <p className="field-hint">{t("updates.hint")}</p>
+        <p className="field-hint">
+          {t("updates.hint")}
+          {waiting > 0 ? ` ${t("updates.waiting", { count: waiting })}` : ""}
+        </p>
       </section>
 
       <section className="panel" aria-labelledby="export-heading">

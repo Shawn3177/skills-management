@@ -1,25 +1,36 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { save } from "@tauri-apps/plugin-dialog";
 import { openUrl, revealItemInDir } from "@tauri-apps/plugin-opener";
-import { Layers, Plus, RefreshCw, Settings } from "lucide-react";
+import { FolderGit2, Package, Plus, Settings } from "lucide-react";
 import "./App.css";
 import { AddView, type AddRequest } from "./components/AddView";
+import { DetailView } from "./components/DetailView";
 import { EditView, type EditChanges } from "./components/EditView";
+import { GithubView } from "./components/GithubView";
 import { MainView, type ScanState, type Tab } from "./components/MainView";
 import { SettingsView } from "./components/SettingsView";
 import { SyncView } from "./components/SyncView";
-import { NoticeBar, PageHeader, ToolMark, type Notice } from "./components/ui";
+import { ToolSwitcher } from "./components/ToolSwitcher";
+import { NoticeBar, PageHeader, type Notice } from "./components/ui";
 import { WindowControls } from "./components/WindowControls";
 import { demoSkills } from "./data/demoSkills";
 import { useLocale } from "./i18n/useLocale";
-import { api, errorText, isBridgeUnavailable, type AppStatus, type SkillUpdateStatus } from "./lib/api";
 import {
-  enabledCount,
+  api,
+  errorText,
+  isBridgeUnavailable,
+  type AppStatus,
+  type GithubAccount,
+  type GithubCatalog,
+  type SkillUpdateStatus,
+} from "./lib/api";
+import {
   filterSkills,
+  folderName,
   githubSource,
   partitionSkills,
+  showInstalledTools,
   tools,
-  upcomingTools,
   type SkillRecord,
   type ToolId,
 } from "./lib/skills";
@@ -27,8 +38,10 @@ import {
 type View =
   | { name: "main" }
   | { name: "edit"; path: string }
+  | { name: "detail"; path: string }
   | { name: "add" }
   | { name: "sync" }
+  | { name: "github" }
   | { name: "settings" };
 
 function App() {
@@ -47,6 +60,12 @@ function App() {
   const [updatingPath, setUpdatingPath] = useState<string | null>(null);
   const [appStatus, setAppStatus] = useState<AppStatus | null>(null);
   const [saving, setSaving] = useState(false);
+  // Bumped when the user changes which tools are shown (tools is a live binding).
+  const [, setToolsVersion] = useState(0);
+  const [account, setAccount] = useState<GithubAccount | null>(null);
+  const [catalog, setCatalog] = useState<GithubCatalog | null>(null);
+  const [catalogLoading, setCatalogLoading] = useState(false);
+  const starred = useMemo(() => new Set((catalog?.starred ?? []).map((name) => name.toLowerCase())), [catalog]);
   // Each scan gets an id so a slower, older scan can't overwrite a newer one.
   const scanRequest = useRef(0);
 
@@ -96,8 +115,20 @@ function App() {
     void loadSkills();
     api
       .appStatus()
-      .then(setAppStatus)
+      .then((status) => {
+        showInstalledTools(status.installedTools ?? []);
+        setAppStatus(status);
+      })
       .catch((error) => console.error("get_app_status failed", error));
+    // The cached list needs no network; the account check asks GitHub once.
+    api
+      .githubCatalog(false)
+      .then(setCatalog)
+      .catch((error) => console.error("github_catalog failed", error));
+    api
+      .githubAccount()
+      .then(setAccount)
+      .catch((error) => console.error("github_account failed", error));
 
     // Pick up skills added or removed outside the app when the window comes
     // back into focus (replaces a manual rescan button).
@@ -230,6 +261,136 @@ function App() {
     }
   }
 
+  /** Look up unknown skill sources on GitHub. Resolves true when it ran. */
+  async function findSources(): Promise<boolean> {
+    setBusyKey("series:find");
+    setNotice(null);
+    try {
+      const result = await api.findSources();
+      const unknown = [...result.ambiguous, ...result.unmatched];
+      const parts = [
+        result.found.length > 0
+          ? t("series.found", {
+              count: result.found.length,
+              repos: new Set(result.found.map((item) => item.repository)).size,
+            })
+          : t("series.foundNone"),
+      ];
+      if (unknown.length > 0) {
+        const names = unknown.slice(0, 5).join(locale === "zh-CN" ? "、" : ", ");
+        parts.push(t("series.stillUnknown", { count: unknown.length, names: unknown.length > 5 ? `${names} …` : names }));
+      }
+      if (result.rateLimited) {
+        parts.push(t("series.rateLimited"));
+      }
+      if (result.failed.length > 0) {
+        parts.push(t("series.failedRepos", { repos: result.failed.join(", ") }));
+      }
+      const clean = result.found.length > 0 && !result.rateLimited && result.failed.length === 0;
+      setNotice({ kind: clean ? "success" : "warning", text: parts.join(locale === "zh-CN" ? "；" : ". ") });
+      return true;
+    } catch (error) {
+      console.error("find_skill_sources failed", error);
+      setNotice({ kind: "error", text: describeError(error) });
+      return false;
+    } finally {
+      setBusyKey(null);
+      await loadSkills();
+    }
+  }
+
+  /** Read the connected account's repositories and stars again. */
+  async function refreshCatalog() {
+    setCatalogLoading(true);
+    try {
+      const fresh = await api.githubCatalog(true);
+      setCatalog(fresh);
+      if (fresh?.rateLimited) {
+        setNotice({ kind: "warning", text: t("mine.partialNotice") });
+      }
+    } catch (error) {
+      console.error("github_catalog refresh failed", error);
+      setNotice({ kind: "error", text: describeError(error) });
+    } finally {
+      setCatalogLoading(false);
+    }
+  }
+
+  /** Show the account's repositories, reading them first if never read. */
+  function openGithub() {
+    go({ name: "github" });
+    // Lists cached by an older version only held repositories with skills.
+    if (account?.login && !catalogLoading && (!catalog || catalog.avatarUrl === undefined)) {
+      void refreshCatalog();
+    }
+  }
+
+  async function connectGithub(token?: string): Promise<boolean> {
+    setBusyKey("github:connect");
+    setNotice(null);
+    try {
+      const connected = token === undefined ? await api.connectGithubCli() : await api.connectGithubToken(token);
+      setAccount(connected);
+      setNotice({ kind: "success", text: t("account.connected", { login: connected.login ?? "" }) });
+      void api.appStatus().then(setAppStatus).catch(() => undefined);
+      void refreshCatalog();
+      return true;
+    } catch (error) {
+      console.error("connect github failed", error);
+      setNotice({ kind: "error", text: describeError(error) });
+      return false;
+    } finally {
+      setBusyKey(null);
+    }
+  }
+
+  async function disconnectGithub() {
+    setBusyKey("github:disconnect");
+    setNotice(null);
+    try {
+      await api.disconnectGithub();
+      setAccount(await api.githubAccount().catch(() => null));
+      setCatalog(null);
+      setNotice({ kind: "success", text: t("account.disconnected") });
+      void api.appStatus().then(setAppStatus).catch(() => undefined);
+    } catch (error) {
+      setNotice({ kind: "error", text: describeError(error) });
+    } finally {
+      setBusyKey(null);
+    }
+  }
+
+  /** Add tool-folder skills to the shared library (one copy per folder name). */
+  async function addAllToLibrary(skills: SkillRecord[]) {
+    setBusyKey("locals:add-all");
+    setNotice(null);
+    const seen = new Set<string>();
+    let added = 0;
+    let lastError: unknown = null;
+    for (const skill of skills) {
+      const folder = folderName(skill.sourcePath).toLowerCase();
+      if (seen.has(folder)) {
+        continue;
+      }
+      seen.add(folder);
+      try {
+        await api.importSkill(skill.sourcePath);
+        added += 1;
+      } catch (error) {
+        console.error("import_skill_to_library failed", error);
+        lastError = error;
+      }
+    }
+    setBusyKey(null);
+    const text = t("locals.addedAll", { count: added });
+    setNotice(
+      lastError === null
+        ? { kind: "success", text }
+        : { kind: added > 0 ? "warning" : "error", text: `${text} ${describeError(lastError)}` },
+    );
+    await loadSkills();
+  }
+
   async function unlinkSeries(repository: string) {
     setBusyKey(`series:unlink:${repository}`);
     setNotice(null);
@@ -264,6 +425,13 @@ function App() {
         }
       } else if (request.kind === "github") {
         libraryPaths.push((await api.importFromGithub(request.url)).libraryPath);
+      } else if (request.kind === "github-many") {
+        const result = await api.importGithubSkills(request.urls);
+        libraryPaths.push(...result.imported.map((item) => item.libraryPath));
+        if (result.failed.length > 0) {
+          failed += result.failed.length;
+          lastError = result.failed[0].error;
+        }
       } else {
         libraryPaths.push(...(await api.importSkillpack(request.path)).libraryPaths);
       }
@@ -425,15 +593,20 @@ function App() {
   }
 
   const editing = view.name === "edit" ? library.find((skill) => skill.sourcePath === view.path) : undefined;
+  const showing = view.name === "detail" ? records.find((skill) => skill.sourcePath === view.path) : undefined;
   const backToMain = () => go({ name: "main" });
   const pageTitle =
     view.name === "edit"
       ? t("edit.title", { skill: editing?.name ?? "" })
+      : view.name === "detail"
+        ? (showing?.name ?? "")
       : view.name === "add"
         ? t("add.title")
         : view.name === "sync"
           ? t("sync.title")
-          : t("settings.title");
+          : view.name === "github"
+            ? t("mine.title")
+            : t("settings.title");
 
   return (
     <main className="app">
@@ -452,50 +625,17 @@ function App() {
             </button>
           </div>
 
-          <div className="tool-tabs" role="tablist" aria-label={t("tabs.label")}>
-            <button
-              type="button"
-              role="tab"
-              aria-selected={tab === "all"}
-              title={t("tabs.allTitle")}
-              className={tab === "all" ? "active" : ""}
-              onClick={() => setTab("all")}
-            >
-              <span className="tool-mark all" aria-hidden="true">
-                <Layers size={11} strokeWidth={2.4} />
-              </span>
-              {t("tabs.all")}
-              <span className="tab-count">{library.length}</span>
-            </button>
-            {tools.map((tool) => (
-              <button
-                type="button"
-                role="tab"
-                key={tool.id}
-                aria-selected={tab === tool.id}
-                className={tab === tool.id ? "active" : ""}
-                onClick={() => setTab(tool.id)}
-              >
-                <ToolMark mono={tool.mono} color={tool.color} />
-                {tool.name}
-                <span className="tab-count">{enabledCount(library, tool.id)}</span>
-              </button>
-            ))}
-            {upcomingTools.map((tool) => (
-              <button
-                type="button"
-                role="tab"
-                key={tool.id}
-                aria-selected={false}
-                disabled
-                title={t("tabs.comingSoon", { tool: tool.name })}
-              >
-                <ToolMark mono={tool.mono} color="#d1d5db" />
-                {tool.name}
-              </button>
-            ))}
-          </div>
+          <ToolSwitcher t={t} tab={tab} library={library} onChange={setTab} />
 
+          <button
+            type="button"
+            className="icon-button framed"
+            aria-label={t("mine.title")}
+            title={t("mine.title")}
+            onClick={openGithub}
+          >
+            <FolderGit2 size={17} strokeWidth={1.8} aria-hidden="true" />
+          </button>
           <button
             type="button"
             className="icon-button framed"
@@ -503,7 +643,7 @@ function App() {
             title={t("nav.sync")}
             onClick={() => go({ name: "sync" })}
           >
-            <RefreshCw size={17} strokeWidth={1.8} aria-hidden="true" />
+            <Package size={17} strokeWidth={1.8} aria-hidden="true" />
             {pendingUpdates > 0 ? <span className="dot" aria-hidden="true" /> : null}
           </button>
           <button type="button" className="fab" aria-label={t("nav.add")} title={t("nav.add")} onClick={() => go({ name: "add" })}>
@@ -532,12 +672,16 @@ function App() {
             busyKey={busyKey}
             onToggle={(skill, toolId, enable) => void toggleTarget(skill, toolId, enable)}
             onOpen={(skill) => go({ name: "edit", path: skill.sourcePath })}
+            onShowDetail={(skill) => go({ name: "detail", path: skill.sourcePath })}
             onOpenFolder={(path) => void openFolder(path)}
             onOpenUrl={(url) => void openExternal(url)}
             onAddToLibrary={(skill) => void addLocalToLibrary(skill)}
             onConflict={askToReplace}
             onLinkSeries={linkSeries}
+            onFindSources={findSources}
+            starred={starred}
             onUnlinkSeries={(repository) => void unlinkSeries(repository)}
+            onAddAllToLibrary={(skills) => void addAllToLibrary(skills)}
             home={home}
           />
         ) : null}
@@ -563,6 +707,26 @@ function App() {
           )
         ) : null}
 
+        {view.name === "detail" ? (
+          showing ? (
+            <DetailView
+              key={showing.sourcePath}
+              t={t}
+              skill={showing}
+              home={home}
+              busy={busyKey !== null}
+              onOpenUrl={(url) => void openExternal(url)}
+              onOpenFolder={(path) => void openFolder(path)}
+              onEdit={(skill) => go({ name: "edit", path: skill.sourcePath })}
+              onAddToLibrary={(skill) => void addLocalToLibrary(skill)}
+            />
+          ) : (
+            <div className="page-body">
+              <p className="empty-state">{t("edit.missing")}</p>
+            </div>
+          )
+        ) : null}
+
         {view.name === "add" ? (
           <AddView
             t={t}
@@ -571,6 +735,29 @@ function App() {
             onSubmit={(request) => void runAdd(request)}
             onCancel={backToMain}
             onError={(message) => setNotice({ kind: "error", text: t("notice.failed", { reason: message }) })}
+            locale={locale}
+            account={account}
+            catalog={catalog}
+            catalogLoading={catalogLoading}
+            onRefreshCatalog={() => void refreshCatalog()}
+            onConnectGithub={() => go({ name: "settings" })}
+            onOpenUrl={(url) => void openExternal(url)}
+          />
+        ) : null}
+
+        {view.name === "github" ? (
+          <GithubView
+            t={t}
+            locale={locale}
+            account={account}
+            catalog={catalog}
+            loading={catalogLoading || busyKey === "github:connect"}
+            library={library}
+            working={adding}
+            onRefresh={() => void refreshCatalog()}
+            onConnect={() => void connectGithub()}
+            onOpenUrl={(url) => void openExternal(url)}
+            onSubmit={(request) => void runAdd(request)}
           />
         ) : null}
 
@@ -583,6 +770,8 @@ function App() {
             checking={checking}
             updatingPath={updatingPath}
             libraryCount={library.length}
+            sources={library.filter((skill) => githubSource(skill))}
+            waiting={locals.filter((skill) => githubSource(skill)).length}
             onCheck={() => void checkUpdates()}
             onUpdate={(status) => void updateSkill(status)}
             onExportAll={() => void exportSkills(library, "skills-library.skillpack")}
@@ -597,6 +786,19 @@ function App() {
             appStatus={appStatus}
             onOpenFolder={(path) => void openFolder(path)}
             onNotice={setNotice}
+            account={account}
+            catalog={catalog}
+            onOpenGithub={openGithub}
+            busy={busyKey !== null}
+            onConnectGithub={connectGithub}
+            onDisconnectGithub={() => void disconnectGithub()}
+            onToolsChanged={() => {
+              setToolsVersion((version) => version + 1);
+              if (tab !== "all" && !tools.some((tool) => tool.id === tab)) {
+                setTab("all");
+              }
+            }}
+            onOpenUrl={(url) => void openExternal(url)}
           />
         ) : null}
       </div>

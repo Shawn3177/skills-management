@@ -1,13 +1,70 @@
 import { useEffect, useRef, type ReactNode } from "react";
 import { ArrowLeft } from "lucide-react";
+import claudeCodeLogo from "../assets/tools/claude-code.svg";
+import codexLogo from "../assets/tools/codex.svg";
+import githubMark from "../assets/tools/github.svg";
+import codebuddyLogo from "../assets/tools/codebuddy.svg";
+import geminiLogo from "../assets/tools/gemini-cli.svg";
+import grokLogo from "../assets/tools/grok-build.svg";
+import hermesLogo from "../assets/tools/hermes.svg";
+import openclawLogo from "../assets/tools/openclaw.svg";
+import opencodeLogo from "../assets/tools/opencode.svg";
+import piLogo from "../assets/tools/pi.svg";
+import qoderLogo from "../assets/tools/qoder.svg";
+import qwenLogo from "../assets/tools/qwen-code.svg";
+import workbuddyLogo from "../assets/tools/workbuddy.png";
 import { monogram, tileColors } from "../lib/skills";
 
-/** The small rounded letter tile used for tools (Claude Code, Codex, …). */
-export function ToolMark({ mono, color, round = false }: { mono: string; color: string; round?: boolean }) {
+const toolLogos: Record<string, string> = {
+  "claude-code": claudeCodeLogo,
+  codex: codexLogo,
+  "gemini-cli": geminiLogo,
+  "grok-build": grokLogo,
+  opencode: opencodeLogo,
+  openclaw: openclawLogo,
+  hermes: hermesLogo,
+  pi: piLogo,
+  "qwen-code": qwenLogo,
+  qoder: qoderLogo,
+  codebuddy: codebuddyLogo,
+  workbuddy: workbuddyLogo,
+};
+
+/** A tool's own logo; greyed out where the tool is off or not supported yet. */
+export function ToolLogo({ id, dim = false }: { id: string; dim?: boolean }) {
+  const logo = toolLogos[id];
+  if (!logo) {
+    return null;
+  }
+  return <img className={`tool-logo ${dim ? "dim" : ""}`} src={logo} alt="" width={18} height={18} aria-hidden="true" />;
+}
+
+/** Opens a skill's (or a series') GitHub page. Icon only unless `withLabel`. */
+export function GithubButton({
+  t,
+  name,
+  url,
+  onOpenUrl,
+  withLabel = false,
+}: {
+  t: (key: "series.openGithubLabel", params: { repo: string }) => string;
+  name: string;
+  url: string;
+  onOpenUrl: (url: string) => void;
+  withLabel?: boolean;
+}) {
+  const label = t("series.openGithubLabel", { repo: name });
   return (
-    <span className={`tool-mark ${round ? "round" : ""}`} style={{ background: color }} aria-hidden="true">
-      {mono}
-    </span>
+    <button
+      type="button"
+      className={withLabel ? "button small github-button" : "icon-button github-button"}
+      aria-label={label}
+      title={url.replace(/^https?:\/\//, "")}
+      onClick={() => onOpenUrl(url)}
+    >
+      <img src={githubMark} alt="" width={15} height={15} aria-hidden="true" />
+      {withLabel ? "GitHub" : null}
+    </button>
   );
 }
 

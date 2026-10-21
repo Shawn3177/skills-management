@@ -72,8 +72,9 @@ pub fn candidate_skill_roots() -> Vec<PathBuf> {
 
     if let Some(home) = home_dir() {
         roots.push(home.join(".agents").join("skills"));
-        roots.push(home.join(".codex").join("skills"));
-        roots.push(home.join(".claude").join("skills"));
+        for (_, _, folder) in targets::TOOLS {
+            roots.push(home.join(folder).join("skills"));
+        }
     }
     if let Ok(data_root) = crate::fs_ops::default_data_root() {
         roots.push(data_root.join("library"));
@@ -121,6 +122,19 @@ fn scan_skill_roots_with_links(
 
             let skill_file = path.join("SKILL.md");
             if !skill_file.is_file() {
+                // Hermes groups skills in category folders: look one level in.
+                if is_categorized_root(root) {
+                    for child in fs::read_dir(&path).into_iter().flatten().flatten() {
+                        let child_path = child.path();
+                        let child_file = child_path.join("SKILL.md");
+                        let hidden = child.file_name().to_string_lossy().starts_with('.');
+                        if !hidden && child_file.is_file() {
+                            if let Some(skill) = scan_skill_dir(root, &child_path, &child_file, target_roots, links) {
+                                skills.push(skill);
+                            }
+                        }
+                    }
+                }
                 continue;
             }
 
@@ -251,6 +265,36 @@ fn read_origin(skill_dir: &Path) -> Origin {
     }
 }
 
+/// The SKILL.md of a skill the app lists, for the details page. Only a skill
+/// folder directly inside a known skills folder (a tool's or the library) can
+/// be read, so the UI can't be used to read arbitrary files.
+pub fn read_skill_markdown(skill_path: &str) -> Result<String, String> {
+    read_skill_markdown_in(skill_path, &candidate_skill_roots())
+}
+
+const MAX_SKILL_MD_BYTES: u64 = 1024 * 1024;
+
+fn read_skill_markdown_in(skill_path: &str, roots: &[PathBuf]) -> Result<String, String> {
+    let dir = Path::new(skill_path)
+        .canonicalize()
+        .map_err(|_| "The skill folder was not found.".to_string())?;
+    let known = roots
+        .iter()
+        .filter_map(|root| root.canonicalize().ok())
+        .any(|root| dir.parent() == Some(root.as_path()));
+    if !known {
+        return Err("Only skills in a known skills folder can be shown.".to_string());
+    }
+    let file = dir.join("SKILL.md");
+    let size = fs::metadata(&file)
+        .map_err(|_| "This skill has no SKILL.md.".to_string())?
+        .len();
+    if size > MAX_SKILL_MD_BYTES {
+        return Err("SKILL.md is too large to show.".to_string());
+    }
+    fs::read_to_string(&file).map_err(|error| format!("Could not read SKILL.md: {error}"))
+}
+
 /// Scan one folder the user picked: either a skill folder itself (it holds a
 /// SKILL.md) or a folder whose child folders are skills.
 pub fn scan_folder(folder: &Path) -> Vec<ScannedSkill> {
@@ -363,13 +407,22 @@ fn support_files(skill_dir: &Path) -> Vec<String> {
     files
 }
 
+/// A tool's skills folder whose skills sit in category folders (Hermes).
+fn is_categorized_root(root: &Path) -> bool {
+    let normalized = root.to_string_lossy().replace('\\', "/").to_lowercase();
+    targets::TOOLS.iter().any(|(id, _, folder)| {
+        targets::CATEGORIZED_TOOLS.contains(id) && normalized.ends_with(&format!("/{folder}/skills"))
+    })
+}
+
 fn source_label(root: &Path) -> String {
     let normalized = root.to_string_lossy().replace('\\', "/").to_lowercase();
 
-    if normalized.contains("/.codex/skills") {
-        "Codex".to_string()
-    } else if normalized.contains("/.claude/skills") {
-        "Claude Code".to_string()
+    if let Some((_, name, _)) = targets::TOOLS
+        .iter()
+        .find(|(_, _, folder)| normalized.contains(&format!("/{folder}/skills")))
+    {
+        name.to_string()
     } else if normalized.contains("/.agents/skills") {
         "Agent Skills".to_string()
     } else if normalized.ends_with("/library") || normalized.contains("/.skills-manage/library") {
@@ -390,9 +443,9 @@ fn target_states(
         .and_then(|value| value.to_str())
         .unwrap_or("unknown-skill");
 
-    targets::KNOWN_TARGETS
+    targets::TOOLS
         .iter()
-        .map(|(target_id, target_name)| {
+        .map(|(target_id, target_name, _)| {
             let (enabled, conflict) =
                 target_state(&source, skill_dir, skill_folder, target_id, target_name, target_roots);
             TargetState {
@@ -730,5 +783,49 @@ homepage: https://github.com/a/reach
         let reach = skills.iter().find(|skill| skill.name == "reach").unwrap();
         assert_eq!(reach.detected_source_url.as_deref(), Some("https://github.com/a/reach"));
         assert!(!reach.linked_source);
+    }
+
+    #[test]
+    fn reads_skill_markdown_only_inside_known_roots() {
+        let root = unique_temp_dir("read-skill-md");
+        let skill = root.join("pdf");
+        fs::create_dir_all(skill.join("nested")).unwrap();
+        fs::write(skill.join("SKILL.md"), "---
+name: pdf
+---
+# PDF
+").unwrap();
+        fs::write(skill.join("nested").join("SKILL.md"), "x").unwrap();
+        let roots = vec![root.clone()];
+
+        let text = read_skill_markdown_in(&skill.display().to_string(), &roots).unwrap();
+        assert!(text.contains("# PDF"));
+        // Not directly in a known root, or outside it entirely.
+        assert!(read_skill_markdown_in(&skill.join("nested").display().to_string(), &roots).is_err());
+        assert!(read_skill_markdown_in(&root.display().to_string(), &roots).is_err());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn finds_hermes_skills_inside_category_folders() {
+        let home = unique_temp_dir("hermes-home");
+        let root = home.join(".hermes").join("skills");
+        fs::create_dir_all(root.join("research").join("arxiv")).unwrap();
+        fs::write(root.join("research").join("arxiv").join("SKILL.md"), "---\nname: arxiv\ndescription: d\n---\n").unwrap();
+        fs::create_dir_all(root.join("flat")).unwrap();
+        fs::write(root.join("flat").join("SKILL.md"), "---\nname: flat\ndescription: d\n---\n").unwrap();
+
+        let skills = scan_skill_roots(&[root.clone()]);
+        let mut names: Vec<_> = skills.iter().map(|skill| skill.name.as_str()).collect();
+        names.sort();
+        assert_eq!(names, vec!["arxiv", "flat"]);
+        assert!(skills.iter().all(|skill| skill.source == "Hermes"));
+
+        // Other tools are not searched below their top level.
+        let codex = home.join(".codex").join("skills");
+        fs::create_dir_all(codex.join("group").join("inner")).unwrap();
+        fs::write(codex.join("group").join("inner").join("SKILL.md"), "---\nname: inner\n---\n").unwrap();
+        assert!(scan_skill_roots(&[codex]).is_empty());
+        let _ = fs::remove_dir_all(home);
     }
 }

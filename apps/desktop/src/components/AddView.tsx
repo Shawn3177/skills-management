@@ -2,16 +2,18 @@ import { useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { Package, Plus } from "lucide-react";
 import type { TFunction } from "../i18n/useLocale";
-import { api, errorText } from "../lib/api";
-import { folderName, tools, upcomingTools, type SkillRecord, type ToolId } from "../lib/skills";
+import { api, errorText, type GithubAccount, type GithubCatalog } from "../lib/api";
+import { folderName, tools, type SkillRecord, type ToolId } from "../lib/skills";
+import { MyGithubPicker } from "./MyGithubPicker";
 import { Chip } from "./ui";
 
 export type AddRequest =
   | { kind: "local"; paths: string[]; enableIn: ToolId[] }
   | { kind: "github"; url: string; enableIn: ToolId[] }
+  | { kind: "github-many"; urls: string[]; enableIn: ToolId[] }
   | { kind: "pack"; path: string; enableIn: ToolId[] };
 
-type Source = "local" | "github" | "pack";
+type Source = "local" | "github" | "mine" | "pack";
 
 type Props = {
   t: TFunction;
@@ -20,10 +22,19 @@ type Props = {
   onSubmit: (request: AddRequest) => void;
   onCancel: () => void;
   onError: (message: string) => void;
+  locale: string;
+  account: GithubAccount | null;
+  catalog: GithubCatalog | null;
+  catalogLoading: boolean;
+  onRefreshCatalog: () => void;
+  onConnectGithub: () => void;
+  onOpenUrl: (url: string) => void;
 };
 
-export function AddView({ t, library, working, onSubmit, onCancel, onError }: Props) {
+export function AddView(props: Props) {
+  const { t, library, working, onSubmit, onCancel, onError } = props;
   const [source, setSource] = useState<Source>("local");
+  const [picked, setPicked] = useState<Set<string>>(new Set());
   const [folder, setFolder] = useState<string | null>(null);
   const [scanning, setScanning] = useState(false);
   const [candidates, setCandidates] = useState<SkillRecord[]>([]);
@@ -93,11 +104,19 @@ export function AddView({ t, library, working, onSubmit, onCancel, onError }: Pr
   const enabledTools = [...enableIn];
   const canSubmit =
     !working &&
-    (source === "local" ? selected.size > 0 : source === "github" ? githubUrl.trim().length > 0 : Boolean(packPath));
+    (source === "local"
+      ? selected.size > 0
+      : source === "github"
+        ? githubUrl.trim().length > 0
+        : source === "mine"
+          ? picked.size > 0
+          : Boolean(packPath));
   const submitLabel = working
     ? t("add.working")
     : source === "local"
       ? t("add.submitCount", { count: selected.size })
+      : source === "mine"
+        ? t("add.submitCount", { count: picked.size })
       : source === "pack"
         ? t("add.submitPack")
         : t("add.submit");
@@ -110,6 +129,8 @@ export function AddView({ t, library, working, onSubmit, onCancel, onError }: Pr
       onSubmit({ kind: "local", paths: [...selected], enableIn: enabledTools });
     } else if (source === "github") {
       onSubmit({ kind: "github", url: githubUrl.trim(), enableIn: enabledTools });
+    } else if (source === "mine") {
+      onSubmit({ kind: "github-many", urls: [...picked], enableIn: enabledTools });
     } else if (packPath) {
       onSubmit({ kind: "pack", path: packPath, enableIn: enabledTools });
     }
@@ -118,6 +139,7 @@ export function AddView({ t, library, working, onSubmit, onCancel, onError }: Pr
   const sources: Array<{ id: Source; label: string; hint: string }> = [
     { id: "local", label: t("add.local"), hint: t("add.localHint") },
     { id: "github", label: t("add.github"), hint: t("add.githubHint") },
+    { id: "mine", label: t("add.mine"), hint: t("add.mineHint") },
     { id: "pack", label: t("add.pack"), hint: t("add.packHint") },
   ];
 
@@ -137,7 +159,17 @@ export function AddView({ t, library, working, onSubmit, onCancel, onError }: Pr
             </span>
             <div className="chip-row" role="group" aria-labelledby="add-source-label">
               {sources.map((item) => (
-                <Chip key={item.id} pressed={source === item.id} onClick={() => setSource(item.id)}>
+                <Chip
+                key={item.id}
+                pressed={source === item.id}
+                onClick={() => {
+                  setSource(item.id);
+                  // The first visit reads the account's repositories once.
+                  if (item.id === "mine" && !props.catalog && !props.catalogLoading && props.account?.login) {
+                    props.onRefreshCatalog();
+                  }
+                }}
+              >
                   {item.label}
                 </Chip>
               ))}
@@ -200,6 +232,23 @@ export function AddView({ t, library, working, onSubmit, onCancel, onError }: Pr
             </label>
           ) : null}
 
+          {source === "mine" ? (
+            <MyGithubPicker
+              t={t}
+              locale={props.locale}
+              mode="add"
+              account={props.account}
+              catalog={props.catalog}
+              loading={props.catalogLoading}
+              libraryFolders={new Set(library.map((skill) => folderName(skill.sourcePath).toLowerCase()))}
+              selected={picked}
+              onSelectedChange={setPicked}
+              onRefresh={props.onRefreshCatalog}
+              onConnect={props.onConnectGithub}
+              onOpenUrl={props.onOpenUrl}
+            />
+          ) : null}
+
           {source === "pack" ? (
             <div className="drop-zone">
               <Package size={26} strokeWidth={1.6} aria-hidden="true" />
@@ -222,11 +271,6 @@ export function AddView({ t, library, working, onSubmit, onCancel, onError }: Pr
                   onClick={() => setEnableIn((current) => toggleSet(current, tool.id))}
                 >
                   {enableIn.has(tool.id) ? `✓ ${tool.name}` : tool.name}
-                </Chip>
-              ))}
-              {upcomingTools.map((tool) => (
-                <Chip key={tool.id} pressed={false} disabled onClick={() => undefined}>
-                  {t("tabs.comingSoon", { tool: tool.name })}
                 </Chip>
               ))}
             </div>

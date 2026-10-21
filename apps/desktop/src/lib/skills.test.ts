@@ -162,6 +162,18 @@ describe("display helpers", () => {
     expect(singles.map((skill) => skill.name)).toEqual(["agent-reach", "plain"]);
   });
 
+  it("groups three or more unsourced skills that share a name prefix", () => {
+    const names = ["remotion-render", "remotion-docs", "Remotion-Maps", "solo-skill", "solo-other"];
+    const known = record({ name: "remotion-known", sourceUrl: "https://github.com/a/b/tree/main/remotion-known" });
+    const { series, singles } = groupBySeries([...names.map((name) => record({ name })), known]);
+
+    expect(series).toHaveLength(1);
+    expect(series[0]).toMatchObject({ key: "prefix:remotion", repository: "remotion-*", url: "", byPrefix: true });
+    expect(series[0].skills.map((skill) => skill.name)).toEqual(["remotion-render", "remotion-docs", "Remotion-Maps"]);
+    // Two of a prefix is not a series; a skill with a known source keeps it.
+    expect(singles.map((skill) => skill.name)).toEqual(["solo-skill", "solo-other", "remotion-known"]);
+  });
+
   it("points a series at the repository root when its skills share no folder", () => {
     const first = record({ name: "a", sourceUrl: "https://github.com/o/r/tree/main/a" });
     const second = record({ name: "b", sourceUrl: "https://github.com/o/r/tree/dev/b" });

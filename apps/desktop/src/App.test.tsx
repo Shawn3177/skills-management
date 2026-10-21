@@ -142,7 +142,7 @@ describe("App", () => {
     mockBackend();
     await renderApp();
 
-    expect(screen.getByRole("tab", { name: /^All/ })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("button", { name: "Tool: All" })).toBeInTheDocument();
     expect(screen.getByText("3 skills in the shared library · 3 enabled across 2 tools")).toBeInTheDocument();
     expect(within(card("code-review")).getByRole("button", { name: "Disable code-review in Codex" })).toHaveAttribute(
       "aria-pressed",
@@ -152,10 +152,66 @@ describe("App", () => {
       "aria-pressed",
       "false",
     );
-    expect(screen.getByText("github.com/owner/skills/tree/main/code-review")).toBeInTheDocument();
+    // Under the name: what the skill does, not its address.
+    expect(within(card("code-review")).getByText("Reviews code changes.")).toBeInTheDocument();
+    expect(screen.queryByText("github.com/owner/skills/tree/main/code-review")).not.toBeInTheDocument();
     // The managed copy in Claude Code's folder is not listed as a separate skill.
     expect(screen.getAllByRole("button", { name: "agent-tool-safety" })).toHaveLength(1);
-    expect(screen.getByText("Only in Claude Code")).toBeInTheDocument();
+    expect(screen.getByRole("img", { name: "pr-description is in Claude Code" })).toBeInTheDocument();
+  });
+
+  it("shows one switcher at the top that lists every tool, installed ones first", async () => {
+    mockBackend({ get_app_status: () => ({ ...appStatus, installedTools: ["claude-code", "codex", "qwen-code"] }) });
+    await renderApp();
+
+    // Only the current choice is shown; the list opens on click.
+    const trigger = screen.getByRole("button", { name: "Tool: All" });
+    expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
+    fireEvent.click(trigger);
+    expect(trigger).toHaveAttribute("aria-expanded", "true");
+
+    const options = within(screen.getByRole("listbox")).getAllByRole("option");
+    expect(options).toHaveLength(13); // All + 12 tools
+    await waitFor(() => expect(screen.getByRole("option", { name: "Qwen Code 0" })).toBeInTheDocument());
+    expect(screen.getByRole("option", { name: "WorkBuddy Not found" })).toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: /^VS Code/ })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("option", { name: "Qwen Code 0" }));
+    expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Tool: Qwen Code" })).toBeInTheDocument();
+  });
+
+  it("switches to a tool that isn't installed and closes on Escape", async () => {
+    mockBackend();
+    await renderApp();
+
+    fireEvent.click(screen.getByRole("button", { name: "Tool: All" }));
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Tool: All" }));
+    fireEvent.click(screen.getByRole("option", { name: "Gemini CLI Not found" }));
+
+    expect(screen.getByRole("button", { name: "Tool: Gemini CLI" })).toBeInTheDocument();
+    expect(screen.getByText("3 skills in the shared library, 0 enabled in Gemini CLI")).toBeInTheDocument();
+  });
+
+  it("lets settings hide a tool from the skill cards", async () => {
+    mockBackend({ get_trash_summary: () => ({ path: "x", entries: 0, totalBytes: 0, purgeableEntries: 0 }) });
+    await renderApp();
+    expect(within(card("code-review")).getByRole("button", { name: "Disable code-review in Codex" })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Settings" }));
+    const codex = screen.getByRole("switch", { name: "Show Codex" });
+    expect(codex).toBeChecked();
+    fireEvent.click(codex);
+    fireEvent.click(screen.getByRole("button", { name: "Back" }));
+
+    expect(within(card("code-review")).queryByRole("button", { name: "Disable code-review in Codex" })).not.toBeInTheDocument();
+    // Still reachable from the switcher, under "Other tools".
+    fireEvent.click(screen.getByRole("button", { name: "Tool: All" }));
+    expect(screen.getByText("Other tools")).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "Codex Not found" })).toBeInTheDocument();
   });
 
   it("uses Chinese by default", async () => {
@@ -163,7 +219,7 @@ describe("App", () => {
     mockBackend();
     await renderApp();
 
-    expect(screen.getByRole("tab", { name: /^全部/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "工具：全部" })).toBeInTheDocument();
     expect(screen.getByText("共享库 3 个技能 · 在 2 个工具中共启用 3 处")).toBeInTheDocument();
   });
 
@@ -219,7 +275,8 @@ describe("App", () => {
     mockBackend({ set_skill_target_enabled: () => ({ enabled: false, changed: true }) });
     await renderApp();
 
-    fireEvent.click(screen.getByRole("tab", { name: /^Claude Code/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Tool: All" }));
+    fireEvent.click(screen.getByRole("option", { name: /^Claude Code/ }));
 
     expect(screen.getByText("3 skills in the shared library, 2 enabled in Claude Code")).toBeInTheDocument();
     expect(within(card("code-review")).getByText("Enabled")).toBeInTheDocument();
@@ -264,7 +321,8 @@ describe("App", () => {
     const chip = within(card("agent-tool-safety")).getByRole("button", {
       name: "agent-tool-safety in Codex differs from the library version",
     });
-    expect(chip).toHaveTextContent("Codex · differs");
+    // Logo only; the tooltip says what differs.
+    expect(chip).toHaveAttribute("title", "Codex · differs");
     fireEvent.click(chip);
 
     expect(screen.getByRole("alert")).toHaveTextContent("Codex already has a agent-tool-safety folder whose content differs");
@@ -378,13 +436,101 @@ describe("App", () => {
     expect(screen.getByRole("button", { name: "code-review" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Unlink owner/skills" })).not.toBeInTheDocument();
 
+    // GitHub opens from its own button, not from the address.
     fireEvent.click(screen.getByRole("button", { name: "Open owner/skills on GitHub" }));
     expect(openUrlMock).toHaveBeenLastCalledWith("https://github.com/owner/skills");
     fireEvent.click(screen.getByRole("button", { name: "Open anthropics/skills on GitHub" }));
     expect(openUrlMock).toHaveBeenLastCalledWith("https://github.com/anthropics/skills/tree/main/skills");
 
+    // Linked repositories are undone from the sources panel, not the group header.
+    expect(screen.queryByRole("button", { name: "Unlink anthropics/skills" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Find sources" }));
     fireEvent.click(screen.getByRole("button", { name: "Unlink anthropics/skills" }));
     await waitFor(() => expect(calls("unlink_github_series")).toEqual([{ repository: "anthropics/skills" }]));
+  });
+
+  it("adds every tool-folder skill to the shared library with one confirmed button", async () => {
+    const codexSkill = (name: string, source = "Codex") => ({
+      ...localOnly,
+      id: `${source}-${name}`,
+      name,
+      source,
+      sourcePath: `C:/Users/example/.${source === "Codex" ? "codex" : "claude"}/skills/${name}`,
+      detectedSourceUrl: `https://github.com/anthropics/skills/tree/main/skills/${name}`,
+      linkedSource: true,
+    });
+    mockBackend({ import_skill_to_library: (args) => ({ imported: true, skillName: "x", libraryPath: `${LIB}/x`, args }) }, [
+      review,
+      codexSkill("pdf"),
+      codexSkill("xlsx"),
+      // The same skill in another tool's folder is added once.
+      codexSkill("pdf", "Claude Code"),
+    ]);
+    await renderApp();
+
+    // The series header shows where its skills live instead of a button.
+    expect(screen.getByRole("img", { name: "anthropics/skills is in Claude Code, Codex" })).toBeInTheDocument();
+
+    // Each group can also be added on its own.
+    expect(screen.getByRole("button", { name: "Add the anthropics/skills group to the shared library" })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Add all to the shared library" }));
+    expect(calls("import_skill_to_library")).toHaveLength(0);
+    fireEvent.click(screen.getByRole("button", { name: "Add 2" }));
+
+    await waitFor(() =>
+      expect(calls("import_skill_to_library")).toEqual([
+        { sourcePath: "C:/Users/example/.codex/skills/pdf" },
+        { sourcePath: "C:/Users/example/.codex/skills/xlsx" },
+      ]),
+    );
+    await waitFor(() =>
+      expect(screen.getByText("Added 2 skills to the shared library.")).toBeInTheDocument(),
+    );
+  });
+
+  it("finds where installed skills came from and reports the ones it could not place", async () => {
+    mockBackend({
+      find_skill_sources: () => ({
+        found: [
+          { folder: "pr-description", repository: "owner/skills", url: "https://github.com/owner/skills/tree/main/pr-description", exact: true },
+        ],
+        unmatched: ["skill-evals"],
+        ambiguous: [],
+        repositories: ["anthropics/skills", "owner/skills"],
+        failed: [],
+        rateLimited: false,
+      }),
+    });
+    await renderApp();
+
+    fireEvent.click(screen.getByRole("button", { name: "1 without a source · find them" }));
+
+    await waitFor(() => expect(calls("find_skill_sources")).toHaveLength(1));
+    await waitFor(() =>
+      expect(
+        screen.getByText("Found sources for 1 skills in 1 repositories. 1 still unknown: skill-evals"),
+      ).toBeInTheDocument(),
+    );
+  });
+
+  it("offers automatic source finding first in the sources panel", async () => {
+    mockBackend({
+      find_skill_sources: () => ({ found: [], unmatched: [], ambiguous: [], repositories: [], failed: [], rateLimited: true }),
+    });
+    await renderApp();
+
+    fireEvent.click(screen.getByRole("button", { name: "Find sources" }));
+    fireEvent.click(screen.getByRole("button", { name: "Find automatically" }));
+
+    await waitFor(() =>
+      expect(
+        screen.getByText(
+          "No new sources found. GitHub's hourly limit was reached before every repository was checked; try again later",
+        ),
+      ).toBeInTheDocument(),
+    );
+    expect(screen.queryByRole("region", { name: "Find where skills came from" })).not.toBeInTheDocument();
   });
 
   it("links a GitHub repository so installed skills are grouped under it", async () => {
@@ -399,7 +545,7 @@ describe("App", () => {
     });
     await renderApp();
 
-    fireEvent.click(screen.getByRole("button", { name: "Link repo" }));
+    fireEvent.click(screen.getByRole("button", { name: "Find sources" }));
     fireEvent.change(screen.getByRole("textbox", { name: "Link a GitHub repository" }), {
       target: { value: "https://github.com/anthropics/skills" },
     });
@@ -422,11 +568,30 @@ describe("App", () => {
     expect(screen.queryByRole("button", { name: "agent-tool-safety" })).not.toBeInTheDocument();
   });
 
+  it("shows a skill's details and SKILL.md when its name is clicked, not GitHub", async () => {
+    mockBackend({
+      read_skill_markdown: () => "---\nname: code-review\ndescription: Reviews code changes.\n---\n# How to review\n\n- Read the diff\n<script>alert(1)</script>\n",
+    });
+    await renderApp();
+
+    fireEvent.click(screen.getByRole("button", { name: "code-review" }));
+
+    expect(openUrlMock).not.toHaveBeenCalled();
+    expect(screen.getByRole("heading", { level: 1, name: "code-review" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "How to review" })).toBeInTheDocument();
+    expect(screen.getByText("Read the diff")).toBeInTheDocument();
+    expect(document.querySelector(".markdown-body script")).toBeNull();
+    expect(calls("read_skill_markdown")).toEqual([{ skillPath: review.sourcePath }]);
+
+    fireEvent.click(screen.getByRole("button", { name: "Open code-review on GitHub" }));
+    expect(openUrlMock).toHaveBeenCalledWith("https://github.com/owner/skills/tree/main/code-review");
+  });
+
   it("opens skill details and removes a skill only after confirming", async () => {
     mockBackend({ remove_skill_from_library: () => ({ skillName: "agent-tool-safety", removedFrom: ["Claude Code"] }) });
     await renderApp();
 
-    fireEvent.click(screen.getByRole("button", { name: "agent-tool-safety" }));
+    fireEvent.click(screen.getByRole("button", { name: "Edit agent-tool-safety" }));
 
     expect(screen.getByRole("heading", { level: 1, name: "Edit skill · agent-tool-safety" })).toHaveFocus();
     expect(screen.getByRole("button", { name: "✓ Claude Code" })).toHaveAttribute("aria-pressed", "true");
@@ -437,7 +602,7 @@ describe("App", () => {
 
     await waitFor(() => expect(calls("remove_skill_from_library")).toEqual([{ libraryPath: safety.sourcePath }]));
     await waitFor(() => expect(screen.getByText("Moved agent-tool-safety to trash.")).toBeInTheDocument());
-    expect(screen.getByRole("tab", { name: /^All/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Tool: All" })).toBeInTheDocument();
   });
 
   it("saves a new name, description and tool selection from the edit page", async () => {
@@ -452,7 +617,7 @@ describe("App", () => {
     await renderApp();
 
     expect(within(card("agent-tool-safety")).getByText("No name")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "agent-tool-safety" }));
+    fireEvent.click(screen.getByRole("button", { name: "Edit agent-tool-safety" }));
     expect(screen.getByText("SKILL.md has no name field. Saving writes the values above into it.")).toBeInTheDocument();
 
     fireEvent.change(screen.getByRole("textbox", { name: "Skill name" }), { target: { value: "Tool safety" } });
@@ -481,7 +646,7 @@ describe("App", () => {
     fireEvent.click(screen.getByRole("button", { name: "Open the folder of code-review" }));
     expect(revealMock).toHaveBeenCalledWith(review.sourcePath);
 
-    fireEvent.click(screen.getByRole("button", { name: "code-review" }));
+    fireEvent.click(screen.getByRole("button", { name: "Edit code-review" }));
 
     fireEvent.click(screen.getByRole("button", { name: "Export .skillpack" }));
     await waitFor(() =>
@@ -495,7 +660,174 @@ describe("App", () => {
     await waitFor(() => expect(screen.getByText("Exported 1 skills.")).toBeInTheDocument());
 
     fireEvent.click(screen.getByRole("button", { name: "Back" }));
-    expect(screen.getByRole("tab", { name: /^All/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Tool: All" })).toBeInTheDocument();
+  });
+
+  it("connects GitHub through the CLI sign-in, reads the account's repositories, and disconnects", async () => {
+    let connected = false;
+    mockBackend({
+      github_account: () => ({ connected, login: connected ? "octo" : null, name: null, source: connected ? "stored" : null }),
+      github_catalog: (args) =>
+        args?.refresh ? { login: "octo", fetchedAt: 0, repos: [], starred: [], scanned: 3, rateLimited: false } : null,
+      connect_github_cli: () => {
+        connected = true;
+        return { connected: true, login: "octo", name: null, source: "stored" };
+      },
+      disconnect_github: () => {
+        connected = false;
+      },
+      get_trash_summary: () => ({ path: "x", entries: 0, totalBytes: 0, purgeableEntries: 0 }),
+    });
+    await renderApp();
+
+    fireEvent.click(screen.getByRole("button", { name: "Settings" }));
+    await waitFor(() => expect(screen.getByText("Not connected")).toBeInTheDocument());
+    fireEvent.click(screen.getByRole("button", { name: "Use GitHub CLI sign-in" }));
+
+    await waitFor(() => expect(screen.getByText("Connected as @octo")).toBeInTheDocument());
+    await waitFor(() => expect(calls("github_catalog")).toContainEqual({ refresh: true }));
+
+    fireEvent.click(screen.getByRole("button", { name: "Disconnect" }));
+    await waitFor(() => expect(calls("disconnect_github")).toHaveLength(1));
+    await waitFor(() => expect(screen.getByText("Not connected")).toBeInTheDocument());
+  });
+
+  it("adds skills picked from the account's own and starred repositories", async () => {
+    const skill = (repo: string, folder: string) => ({
+      folder,
+      path: `skills/${folder}`,
+      url: `https://github.com/${repo}/tree/main/skills/${folder}`,
+      blob: folder,
+    });
+    mockBackend({
+      github_account: () => ({ connected: true, login: "octo", name: null, source: "stored" }),
+      github_catalog: () => ({
+        login: "octo",
+        fetchedAt: 0,
+        starred: ["owner/skills"],
+        scanned: 2,
+        rateLimited: false,
+        repos: [
+          {
+            fullName: "octo/kit",
+            description: "My skills",
+            htmlUrl: "https://github.com/octo/kit",
+            defaultBranch: "main",
+            owned: true,
+            starred: false,
+            fork: false,
+            stars: 1,
+            skills: [skill("octo/kit", "pdf"), skill("octo/kit", "code-review")],
+          },
+          {
+            fullName: "owner/skills",
+            description: null,
+            htmlUrl: "https://github.com/owner/skills",
+            defaultBranch: "main",
+            owned: false,
+            starred: true,
+            fork: false,
+            stars: 900,
+            skills: [skill("owner/skills", "tdd")],
+          },
+        ],
+      }),
+      import_github_skills: (args) => ({
+        imported: (args?.urls as string[]).map((url) => ({ skillName: url, libraryPath: `${LIB}/${url.split("/").pop()}`, url })),
+        failed: [],
+      }),
+      set_skill_target_enabled: () => ({ enabled: true }),
+    });
+    await renderApp();
+
+    fireEvent.click(screen.getByRole("button", { name: "Add skill" }));
+    fireEvent.click(screen.getByRole("button", { name: "My GitHub" }));
+    await waitFor(() => expect(screen.getByText("octo/kit")).toBeInTheDocument());
+
+    // "Starred" narrows the list; "All" brings it back.
+    fireEvent.click(screen.getByRole("button", { name: "Starred" }));
+    expect(screen.queryByText("octo/kit")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "All" }));
+
+    // code-review is already in the library, so selecting the repository picks only pdf.
+    fireEvent.click(screen.getByRole("checkbox", { name: "Select every skill in octo/kit" }));
+    fireEvent.click(screen.getByRole("button", { name: "Add 1 skills" }));
+
+    await waitFor(() =>
+      expect(calls("import_github_skills")).toEqual([{ urls: ["https://github.com/octo/kit/tree/main/skills/pdf"] }]),
+    );
+    await waitFor(() =>
+      expect(calls("set_skill_target_enabled")).toEqual([{ sourcePath: `${LIB}/pdf`, targetId: "claude-code", enabled: true }]),
+    );
+  });
+
+  it("shows every own and starred repository on the My GitHub page", async () => {
+    const repo = (fullName: string, extra: Record<string, unknown>) => ({
+      fullName,
+      description: null,
+      htmlUrl: `https://github.com/${fullName}`,
+      defaultBranch: "main",
+      owned: false,
+      starred: false,
+      fork: false,
+      stars: 0,
+      skills: [],
+      private: false,
+      language: null,
+      pushedAt: "2026-10-01T00:00:00Z",
+      ...extra,
+    });
+    mockBackend({
+      github_account: () => ({ connected: true, login: "octo", name: "Octo Cat", source: "stored" }),
+      github_catalog: () => ({
+        login: "octo",
+        name: "Octo Cat",
+        avatarUrl: null,
+        fetchedAt: 0,
+        starred: ["owner/skills"],
+        scanned: 2,
+        rateLimited: false,
+        repos: [
+          repo("octo/notes", { owned: true, description: "Plain notes", language: "TypeScript", private: true }),
+          repo("owner/skills", {
+            starred: true,
+            stars: 1200,
+            skills: [{ folder: "tdd", path: "tdd", url: "https://github.com/owner/skills/tree/main/tdd", blob: "x" }],
+          }),
+        ],
+      }),
+      import_github_skills: () => ({ imported: [{ skillName: "tdd", libraryPath: `${LIB}/tdd`, url: "" }], failed: [] }),
+      set_skill_target_enabled: () => ({ enabled: true }),
+    });
+    await renderApp();
+
+    fireEvent.click(screen.getByRole("button", { name: "My GitHub" }));
+
+    expect(await screen.findByText("Octo Cat")).toBeInTheDocument();
+    expect(screen.getByText("octo/notes")).toBeInTheDocument();
+    expect(screen.getByText("Plain notes")).toBeInTheDocument();
+    expect(screen.getByText("No skills")).toBeInTheDocument();
+    expect(screen.getByText("1 own repositories · 1 starred · 1 with skills · updated", { exact: false })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "With skills" }));
+    expect(screen.queryByText("octo/notes")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("checkbox", { name: "Select every skill in owner/skills" }));
+    fireEvent.click(screen.getByRole("button", { name: "Add 1 skills" }));
+    await waitFor(() =>
+      expect(calls("import_github_skills")).toEqual([{ urls: ["https://github.com/owner/skills/tree/main/tdd"] }]),
+    );
+  });
+
+  it("marks a series whose repository the account starred", async () => {
+    const docx = { ...review, id: "docx", name: "docx", sourcePath: `${LIB}/docx`, sourceUrl: "https://github.com/owner/skills/tree/main/docx" };
+    mockBackend(
+      { github_catalog: () => ({ login: "octo", fetchedAt: 0, repos: [], starred: ["Owner/Skills"], scanned: 0, rateLimited: false }) },
+      [review, docx, safety],
+    );
+    render(<App />);
+
+    await waitFor(() => expect(screen.getByRole("img", { name: "Starred" })).toBeInTheDocument());
   });
 
   it("adds a skill from GitHub and enables it in the chosen tools", async () => {
@@ -614,7 +946,7 @@ describe("App", () => {
 
     expect(screen.getByText("D:\\data\\.skills-manage")).toBeInTheDocument();
     await waitFor(() => expect(screen.getByText("Skills Manage 0.1.0")).toBeInTheDocument());
-    expect(screen.getByText("Not set")).toBeInTheDocument();
+    expect(screen.getByText("Not connected")).toBeInTheDocument();
     await waitFor(() => expect(screen.getByText("2 items · 2.0 KB")).toBeInTheDocument());
 
     fireEvent.click(screen.getByRole("button", { name: "Clear items older than 30 days" }));

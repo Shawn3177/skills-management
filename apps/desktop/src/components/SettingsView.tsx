@@ -1,8 +1,17 @@
 import { useEffect, useState } from "react";
 import { locales, type Locale } from "../i18n/messages";
 import type { TFunction } from "../i18n/useLocale";
-import { api, errorText, formatBytes, type AppStatus, type TrashSummary } from "../lib/api";
-import type { Notice } from "./ui";
+import {
+  api,
+  errorText,
+  formatBytes,
+  type AppStatus,
+  type GithubAccount,
+  type GithubCatalog,
+  type TrashSummary,
+} from "../lib/api";
+import { allTools, isToolInstalled, isToolShown, setToolShown } from "../lib/skills";
+import { ToolLogo, type Notice } from "./ui";
 
 /** Full language names for the settings switch (the language's own name). */
 const languageNames: Record<Locale, string> = { "zh-CN": "中文", "en-US": "English" };
@@ -17,10 +26,40 @@ type Props = {
   appStatus: AppStatus | null;
   onOpenFolder: (path: string) => void;
   onNotice: (notice: Notice) => void;
+  account: GithubAccount | null;
+  catalog: GithubCatalog | null;
+  onOpenGithub: () => void;
+  busy: boolean;
+  /** Without a token: use GitHub CLI's sign-in. Resolves true when connected. */
+  onConnectGithub: (token?: string) => Promise<boolean>;
+  onDisconnectGithub: () => void;
+  onOpenUrl: (url: string) => void;
+  /** Which tools are shown changed (tabs and toggles need a refresh). */
+  onToolsChanged: () => void;
 };
 
-export function SettingsView({ t, locale, onLocaleChange, appStatus, onOpenFolder, onNotice }: Props) {
+/** A classic token needs no scopes to read public repositories and stars. */
+const NEW_TOKEN_URL = "https://github.com/settings/tokens/new?description=Skills%20Manage";
+
+export function SettingsView({
+  t,
+  locale,
+  onLocaleChange,
+  appStatus,
+  onOpenFolder,
+  onNotice,
+  account,
+  catalog,
+  onOpenGithub,
+  busy,
+  onConnectGithub,
+  onDisconnectGithub,
+  onOpenUrl,
+  onToolsChanged,
+}: Props) {
   const [trash, setTrash] = useState<TrashSummary | null>(null);
+  const [pasting, setPasting] = useState(false);
+  const [token, setToken] = useState("");
   const [confirming, setConfirming] = useState(false);
   const [purging, setPurging] = useState(false);
 
@@ -90,6 +129,123 @@ export function SettingsView({ t, locale, onLocaleChange, appStatus, onOpenFolde
         </div>
       </section>
 
+      <section className="panel" aria-labelledby="settings-tools">
+        <div className="panel-head">
+          <h2 id="settings-tools">{t("settings.tools")}</h2>
+          <span className="muted small">{t("settings.toolsHint")}</span>
+        </div>
+        <ul className="tool-list">
+          {allTools.map((tool) => {
+            const installed = isToolInstalled(tool.id);
+            const shown = isToolShown(tool.id);
+            return (
+              <li key={tool.id} className="tool-row">
+                <ToolLogo id={tool.id} dim={!installed} />
+                <span className="setting-label">
+                  {tool.name}
+                  <small className="mono">{tool.folder}</small>
+                </span>
+                <span className={`tag ${installed ? "success" : "neutral"}`}>
+                  {installed ? t("settings.installed") : t("settings.notInstalled")}
+                </span>
+                <label className="switch">
+                  <input
+                    type="checkbox"
+                    role="switch"
+                    aria-label={t("settings.showTool", { tool: tool.name })}
+                    checked={shown}
+                    onChange={(event) => {
+                      setToolShown(tool.id, event.currentTarget.checked);
+                      onToolsChanged();
+                    }}
+                  />
+                  <span aria-hidden="true" />
+                </label>
+              </li>
+            );
+          })}
+        </ul>
+      </section>
+
+      <section className="panel" aria-labelledby="settings-github">
+        <h2 id="settings-github">{t("account.title")}</h2>
+        <div className="setting-row">
+          <span className="setting-label">
+            {account?.connected && account.login
+              ? t("account.signedIn", { login: account.login })
+              : account?.connected
+                ? t("account.broken")
+                : t("account.notConnected")}
+            <small>
+              {account?.connected && account.login && catalog && catalog.avatarUrl !== undefined
+                ? t("account.summary", {
+                    owned: catalog.repos.filter((repo) => repo.owned).length,
+                    starred: catalog.starred.length,
+                    skills: catalog.repos.filter((repo) => repo.skills.length > 0).length,
+                  })
+                : account?.source === "environment"
+                  ? t("account.fromEnvironment")
+                  : t("account.hint")}
+            </small>
+          </span>
+          {account?.connected && account.login ? (
+            <span className="confirm-group">
+              <button type="button" className="button small primary" onClick={onOpenGithub}>
+                {t("account.viewRepos")}
+              </button>
+              {account.source === "stored" ? (
+                <button type="button" className="button small" disabled={busy} onClick={onDisconnectGithub}>
+                  {t("account.disconnect")}
+                </button>
+              ) : null}
+            </span>
+          ) : account?.connected && account.source === "stored" ? (
+            <button type="button" className="button small" disabled={busy} onClick={onDisconnectGithub}>
+              {t("account.disconnect")}
+            </button>
+          ) : account?.source !== "environment" ? (
+            <span className="confirm-group">
+              <button type="button" className="button small" disabled={busy} onClick={() => setPasting((value) => !value)}>
+                {t("account.pasteToken")}
+              </button>
+              <button type="button" className="button small primary" disabled={busy} onClick={() => void onConnectGithub()}>
+                {t("account.useCli")}
+              </button>
+            </span>
+          ) : null}
+        </div>
+        {pasting && !(account?.connected && account.login) ? (
+          <form
+            className="token-row"
+            onSubmit={(event) => {
+              event.preventDefault();
+              void onConnectGithub(token).then((ok) => {
+                if (ok) {
+                  setToken("");
+                  setPasting(false);
+                }
+              });
+            }}
+          >
+            <input
+              className="text-input mono"
+              type="password"
+              autoComplete="off"
+              aria-label={t("account.tokenLabel")}
+              placeholder="ghp_… / github_pat_…"
+              value={token}
+              onChange={(event) => setToken(event.currentTarget.value)}
+            />
+            <button type="submit" className="button small primary" disabled={busy || !token.trim()}>
+              {t("account.connect")}
+            </button>
+            <button type="button" className="button small ghost" onClick={() => onOpenUrl(NEW_TOKEN_URL)}>
+              {t("account.newToken")}
+            </button>
+          </form>
+        ) : null}
+      </section>
+
       <section className="panel" aria-labelledby="settings-trash">
         <h2 id="settings-trash">{t("settings.trash")}</h2>
         <div className="setting-row">
@@ -123,15 +279,6 @@ export function SettingsView({ t, locale, onLocaleChange, appStatus, onOpenFolde
 
       <section className="panel" aria-labelledby="settings-advanced">
         <h2 id="settings-advanced">{t("settings.advanced")}</h2>
-        <div className="setting-row">
-          <span className="setting-label">
-            {t("settings.token")}
-            <small>{t("settings.tokenHint")}</small>
-          </span>
-          <span className={`tag ${appStatus?.githubTokenConfigured ? "success" : "neutral"}`}>
-            {appStatus?.githubTokenConfigured ? t("settings.tokenSet") : t("settings.tokenUnset")}
-          </span>
-        </div>
         <div className="setting-row">
           <span className="setting-label">{t("settings.version")}</span>
           <span className="muted">Skills Manage {appStatus?.version ?? ""}</span>

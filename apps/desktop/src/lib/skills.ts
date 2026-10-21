@@ -33,7 +33,19 @@ export interface SkillRecord {
   issues?: string[];
 }
 
-export type ToolId = "claude-code" | "codex";
+export type ToolId =
+  | "claude-code"
+  | "codex"
+  | "gemini-cli"
+  | "grok-build"
+  | "opencode"
+  | "openclaw"
+  | "hermes"
+  | "pi"
+  | "qwen-code"
+  | "qoder"
+  | "codebuddy"
+  | "workbuddy";
 
 export interface Tool {
   id: ToolId;
@@ -42,18 +54,77 @@ export interface Tool {
   sourceLabel: string;
   mono: string;
   color: string;
+  /** Its personal skills folder, for display. */
+  folder: string;
 }
 
 export const LIBRARY_SOURCE = "Shared Library";
 
 /** Tools whose skills Skills Manage can switch on and off, in display order. */
-export const tools: Tool[] = [
-  { id: "claude-code", name: "Claude Code", sourceLabel: "Claude Code", mono: "C", color: "#d97757" },
-  { id: "codex", name: "Codex", sourceLabel: "Codex", mono: "X", color: "#1f2937" },
+export const allTools: Tool[] = [
+  { id: "claude-code", name: "Claude Code", sourceLabel: "Claude Code", mono: "C", color: "#d97757", folder: "~/.claude/skills" },
+  { id: "codex", name: "Codex", sourceLabel: "Codex", mono: "X", color: "#1f2937", folder: "~/.codex/skills" },
+  { id: "gemini-cli", name: "Gemini CLI", sourceLabel: "Gemini CLI", mono: "G", color: "#3186ff", folder: "~/.gemini/skills" },
+  { id: "grok-build", name: "Grok Build", sourceLabel: "Grok Build", mono: "Gr", color: "#111111", folder: "~/.grok/skills" },
+  { id: "opencode", name: "OpenCode", sourceLabel: "OpenCode", mono: "O", color: "#111111", folder: "~/.config/opencode/skills" },
+  { id: "openclaw", name: "OpenClaw", sourceLabel: "OpenClaw", mono: "Oc", color: "#ff4d4d", folder: "~/.openclaw/skills" },
+  { id: "hermes", name: "Hermes", sourceLabel: "Hermes", mono: "H", color: "#111111", folder: "~/.hermes/skills" },
+  { id: "pi", name: "Pi", sourceLabel: "Pi", mono: "Pi", color: "#111111", folder: "~/.pi/agent/skills" },
+  { id: "qwen-code", name: "Qwen Code", sourceLabel: "Qwen Code", mono: "Q", color: "#615ced", folder: "~/.qwen/skills" },
+  { id: "qoder", name: "Qoder", sourceLabel: "Qoder", mono: "Qd", color: "#2adb5c", folder: "~/.qoder/skills" },
+  { id: "codebuddy", name: "CodeBuddy", sourceLabel: "CodeBuddy", mono: "CB", color: "#6c4cff", folder: "~/.codebuddy/skills" },
+  { id: "workbuddy", name: "WorkBuddy", sourceLabel: "WorkBuddy", mono: "WB", color: "#22c38e", folder: "~/.workbuddy/skills" },
 ];
 
-/** Shown in the tool switcher but not yet switchable. */
-export const upcomingTools = [{ id: "vs-code", name: "VS Code", mono: "V" }];
+/** Always shown unless the user hides them. */
+const ALWAYS_SHOWN: ToolId[] = ["claude-code", "codex"];
+const SHOWN_KEY = "skills-manage.tools.shown";
+let installedTools: string[] = [];
+
+/** The user's own show/hide choices (per computer; storage may be unavailable). */
+function readShownChoices(): Record<string, boolean> {
+  try {
+    const saved: unknown = JSON.parse(window.localStorage.getItem(SHOWN_KEY) ?? "{}");
+    return saved && typeof saved === "object" ? (saved as Record<string, boolean>) : {};
+  } catch {
+    return {};
+  }
+}
+
+export function isToolInstalled(id: ToolId): boolean {
+  return installedTools.includes(id);
+}
+
+/** Shown: the user's choice, else the main two plus every installed tool. */
+export function isToolShown(id: ToolId): boolean {
+  return readShownChoices()[id] ?? (ALWAYS_SHOWN.includes(id) || isToolInstalled(id));
+}
+
+/**
+ * The tools the UI shows (tabs, toggles). A live binding, refreshed when the
+ * installed tools are known or the user changes what is shown.
+ */
+export let tools: Tool[] = allTools.filter((tool) => ALWAYS_SHOWN.includes(tool.id));
+
+function refreshShownTools() {
+  tools = allTools.filter((tool) => isToolShown(tool.id));
+}
+
+export function showInstalledTools(installed: string[]) {
+  installedTools = installed;
+  refreshShownTools();
+}
+
+export function setToolShown(id: ToolId, shown: boolean) {
+  const choices = readShownChoices();
+  choices[id] = shown;
+  try {
+    window.localStorage.setItem(SHOWN_KEY, JSON.stringify(choices));
+  } catch {
+    // Not remembered; the change still applies until the app restarts.
+  }
+  refreshShownTools();
+}
 
 export function isLibrarySkill(record: SkillRecord): boolean {
   return record.source === LIBRARY_SOURCE;
@@ -172,12 +243,17 @@ export interface SkillSeries {
   key: string;
   /** `owner/repo` as written. */
   repository: string;
-  /** The deepest GitHub folder that holds every skill of the series. */
+  /** The deepest GitHub folder that holds every skill of the series ("" when unknown). */
   url: string;
   skills: SkillRecord[];
   /** At least one member is only grouped because the user linked the repository. */
   linked: boolean;
+  /** Grouped by a shared name prefix (`remotion-*`) because no source is known yet. */
+  byPrefix?: boolean;
 }
+
+/** Skills without a known source that share a name prefix this often form a series. */
+const PREFIX_SERIES_MIN = 3;
 
 /**
  * Collect skills from the same GitHub repository into series (two or more
@@ -213,6 +289,26 @@ export function groupBySeries(records: SkillRecord[]): { series: SkillSeries[]; 
     });
   }
   series.sort((left, right) => left.repository.localeCompare(right.repository));
+
+  // No source yet (not identified, offline): skills installed as a set
+  // usually share a prefix, e.g. remotion-render, remotion-docs …
+  const byPrefix = new Map<string, SkillRecord[]>();
+  for (const record of records) {
+    const dash = record.name.indexOf("-");
+    if (grouped.has(record) || githubSource(record) || dash <= 0) {
+      continue;
+    }
+    const prefix = record.name.slice(0, dash).toLowerCase();
+    byPrefix.set(prefix, [...(byPrefix.get(prefix) ?? []), record]);
+  }
+  for (const [prefix, members] of [...byPrefix].sort(([left], [right]) => left.localeCompare(right))) {
+    if (members.length < PREFIX_SERIES_MIN) {
+      continue;
+    }
+    members.forEach((member) => grouped.add(member));
+    series.push({ key: `prefix:${prefix}`, repository: `${prefix}-*`, url: "", skills: members, linked: false, byPrefix: true });
+  }
+
   return { series, singles: records.filter((record) => !grouped.has(record)) };
 }
 

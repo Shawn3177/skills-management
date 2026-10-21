@@ -47,7 +47,8 @@ describe("App stylesheet contracts", () => {
   it("keeps desktop pointer targets comfortably clickable", () => {
     expect(appStyles).toContain("--control: 32px");
     expect(cssBlock(/\.button\s*\{([^}]*)\}/s)).toContain("min-height: var(--control)");
-    expect(cssBlock(/\.tool-tabs button\s*\{([^}]*)\}/s)).toContain("min-height: 32px");
+    expect(cssBlock(/\.switcher-trigger\s*\{([^}]*)\}/s)).toContain("min-height: 38px");
+    expect(cssBlock(/\.switcher-option\s*\{([^}]*)\}/s)).toContain("min-height: 36px");
     expect(cssBlock(/\.fab\s*\{([^}]*)\}/s)).toContain("width: 36px");
     expect(cssBlock(/\.back-button\s*\{([^}]*)\}/s)).toContain("width: 34px");
   });

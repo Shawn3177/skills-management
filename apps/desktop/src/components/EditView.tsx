@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Check } from "lucide-react";
 import type { TFunction } from "../i18n/useLocale";
-import { hasConflictIn, isEnabledIn, sourceLine, tildePath, tools, upcomingTools, type SkillRecord, type ToolId } from "../lib/skills";
+import { hasConflictIn, isEnabledIn, sourceLine, tildePath, tools, type SkillRecord, type ToolId } from "../lib/skills";
 import { Chip, SkillTile } from "./ui";
 
 export type EditChanges = {
@@ -98,11 +98,6 @@ export function EditView({ t, skill, home, busy, saving, onSave, onExport, onRem
                     : hasConflictIn(skill, tool.id)
                       ? t("card.conflict", { tool: tool.name })
                       : tool.name}
-                </Chip>
-              ))}
-              {upcomingTools.map((tool) => (
-                <Chip key={tool.id} pressed={false} disabled onClick={() => undefined}>
-                  {t("tabs.comingSoon", { tool: tool.name })}
                 </Chip>
               ))}
             </div>

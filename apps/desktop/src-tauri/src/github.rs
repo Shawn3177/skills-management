@@ -235,7 +235,19 @@ pub fn import_from_github_with_root(
     // the content even if the branch moves between the two requests.
     let zip_bytes = download_zipball(&agent, &parsed.owner, &parsed.repo, &synced_commit)
         .map_err(|error| error.message())?;
+    install_from_zip(&zip_bytes, &parsed, &git_ref, &subdir, &synced_commit, data_root)
+}
 
+/// Place the skill at `subdir` of a downloaded archive in the library and
+/// record where it came from.
+fn install_from_zip(
+    zip_bytes: &[u8],
+    parsed: &GithubRef,
+    git_ref: &str,
+    subdir: &str,
+    synced_commit: &str,
+    data_root: &Path,
+) -> Result<GithubImportResult, String> {
     // Name the staging skill folder after the subdir's last segment (or repo) so
     // the library folder is derived from a meaningful name, not the staging id.
     let skill_name = subdir
@@ -248,7 +260,7 @@ pub fn import_from_github_with_root(
     let skill_staging = staging_parent.join(safe_folder_name(&skill_name, "github-skill"));
 
     let prepared = (|| {
-        extract_subdir_from_zip(&zip_bytes, &subdir, &skill_staging)?;
+        extract_subdir_from_zip(zip_bytes, subdir, &skill_staging)?;
         if !skill_staging.join("SKILL.md").is_file() {
             return Err(if subdir.is_empty() {
                 "The repository root has no SKILL.md. Use a /tree/<branch>/<subdir> URL that points at the skill folder.".to_string()
@@ -269,14 +281,14 @@ pub fn import_from_github_with_root(
     let import = import?;
 
     let library_path = PathBuf::from(&import.library_path);
-    let url = canonical_url(&parsed.owner, &parsed.repo, &git_ref, &subdir);
+    let url = canonical_url(&parsed.owner, &parsed.repo, git_ref, subdir);
     let source = GithubSource {
         kind: "github".to_string(),
         owner: parsed.owner.clone(),
         repo: parsed.repo.clone(),
-        git_ref: git_ref.clone(),
-        subdir: subdir.clone(),
-        synced_commit: synced_commit.clone(),
+        git_ref: git_ref.to_string(),
+        subdir: subdir.to_string(),
+        synced_commit: synced_commit.to_string(),
         synced_at: unix_ms(),
         url: url.clone(),
     };
@@ -285,14 +297,62 @@ pub fn import_from_github_with_root(
     Ok(GithubImportResult {
         skill_name: import.skill_name,
         library_path: import.library_path,
-        owner: parsed.owner,
-        repo: parsed.repo,
-        git_ref,
-        subdir,
-        synced_commit,
+        owner: parsed.owner.clone(),
+        repo: parsed.repo.clone(),
+        git_ref: git_ref.to_string(),
+        subdir: subdir.to_string(),
+        synced_commit: synced_commit.to_string(),
         url,
         message: "Skill imported from GitHub into the shared library.".to_string(),
     })
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FailedImport {
+    pub url: String,
+    pub error: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BatchImportResult {
+    pub imported: Vec<GithubImportResult>,
+    pub failed: Vec<FailedImport>,
+}
+
+/// Import several skills from GitHub. Skills from the same repository and
+/// branch share one download; each records the last commit of its own folder.
+pub fn import_github_skills(urls: Vec<String>) -> Result<BatchImportResult, String> {
+    let data_root = default_data_root()?;
+    let agent = build_agent()?;
+    let mut archives: Vec<(String, Vec<u8>)> = Vec::new();
+    let mut result = BatchImportResult { imported: Vec::new(), failed: Vec::new() };
+
+    for url in urls {
+        let outcome = (|| {
+            let parsed = parse_github_url(&url)?;
+            let (git_ref, subdir, path_commit) =
+                resolve_ref_and_commit(&agent, &parsed).map_err(|error| error.message())?;
+            let key = format!("{}/{}@{git_ref}", parsed.owner, parsed.repo).to_lowercase();
+            if !archives.iter().any(|(known, _)| *known == key) {
+                let head = latest_commit(&agent, &parsed.owner, &parsed.repo, &git_ref, "")
+                    .map_err(|error| error.message())?;
+                let bytes = download_zipball(&agent, &parsed.owner, &parsed.repo, &head)
+                    .map_err(|error| error.message())?;
+                archives.push((key.clone(), bytes));
+            }
+            let zip_bytes = &archives.iter().find(|(known, _)| *known == key).expect("archive was just added").1;
+            // The branch head holds the same folder content as the folder's own
+            // last commit, which is what update checks compare against.
+            install_from_zip(zip_bytes, &parsed, &git_ref, &subdir, &path_commit, &data_root)
+        })();
+        match outcome {
+            Ok(imported) => result.imported.push(imported),
+            Err(error) => result.failed.push(FailedImport { url, error }),
+        }
+    }
+    Ok(result)
 }
 
 /// Find the ref, subdir and latest commit for a parsed URL. For `/tree/a/b/c`
@@ -607,12 +667,26 @@ pub(crate) fn detect_github_url(skill_dir: &Path) -> Option<String> {
     let contents = fs::read_to_string(skill_dir.join("SKILL.md")).ok()?;
     let contents = contents.strip_prefix('\u{feff}').unwrap_or(&contents);
     let mut lines = contents.lines();
-    if lines.next().map(str::trim_end) != Some("---") {
-        return None;
+    if lines.next().map(str::trim_end) == Some("---") {
+        if let Some(url) = lines.by_ref().take_while(|line| line.trim_end() != "---").find_map(github_url_in_line) {
+            return Some(url);
+        }
     }
-    lines
-        .take_while(|line| line.trim_end() != "---")
-        .find_map(github_url_in_line)
+    // The body links to many projects; only trust a repository named exactly
+    // like the skill's folder (e.g. a `git clone …/<skill>.git` line).
+    let folder = skill_dir.file_name()?.to_str()?.to_lowercase();
+    contents
+        .lines()
+        .flat_map(github_urls_in_line)
+        .map(|url| url.trim_end_matches(".git").to_string())
+        .find(|url| parse_github_url(url).is_ok_and(|parsed| parsed.repo.to_lowercase() == folder))
+}
+
+/// Every GitHub URL in a line.
+fn github_urls_in_line(line: &str) -> Vec<String> {
+    line.match_indices("github.com/")
+        .filter_map(|(start, _)| github_url_in_line(&line[start..]))
+        .collect()
 }
 
 /// Where a skill not added from GitHub can be updated from: a repository named
@@ -707,19 +781,352 @@ fn repo_tree(
     repo: &str,
     commit: &str,
 ) -> Result<(Vec<String>, bool), GithubError> {
-    let url = format!("https://api.github.com/repos/{owner}/{repo}/git/trees/{commit}?recursive=1");
+    let (files, truncated) = repo_files(agent, owner, repo, commit)?;
+    Ok((files.into_iter().map(|(path, _)| path).collect(), truncated))
+}
+
+/// Every file in the repository at a commit or branch: (path, blob id).
+pub(crate) fn repo_files(
+    agent: &ureq::Agent,
+    owner: &str,
+    repo: &str,
+    tree_ish: &str,
+) -> Result<(Vec<(String, String)>, bool), GithubError> {
+    let url = format!(
+        "https://api.github.com/repos/{owner}/{repo}/git/trees/{}?recursive=1",
+        encode_query(tree_ish)
+    );
     let json = api_get_json(agent, &url)?;
     let tree = json
         .get("tree")
         .and_then(|value| value.as_array())
         .ok_or_else(|| GithubError::Other("Unexpected response from GitHub trees API.".to_string()))?;
-    let paths = tree
+    let files = tree
         .iter()
         .filter(|item| item.get("type").and_then(|value| value.as_str()) == Some("blob"))
-        .filter_map(|item| item.get("path").and_then(|value| value.as_str()).map(str::to_string))
+        .filter_map(|item| {
+            let path = item.get("path")?.as_str()?.to_string();
+            let sha = item.get("sha")?.as_str()?.to_string();
+            Some((path, sha))
+        })
         .collect();
     let truncated = json.get("truncated").and_then(|value| value.as_bool()).unwrap_or(false);
-    Ok((paths, truncated))
+    Ok((files, truncated))
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FoundSource {
+    pub folder: String,
+    pub repository: String,
+    pub url: String,
+    /// Identical SKILL.md upstream (false: matched by folder name only, so the
+    /// installed copy is probably an older or edited version).
+    pub exact: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FindSourcesResult {
+    /// Installed skills that had no source and were linked now.
+    pub found: Vec<FoundSource>,
+    /// Installed skills still without a source.
+    pub unmatched: Vec<String>,
+    /// Skills whose name exists in several repositories (none identical).
+    pub ambiguous: Vec<String>,
+    /// Repositories that were checked.
+    pub repositories: Vec<String>,
+    /// Repositories that could not be read (moved, private, network error).
+    pub failed: Vec<String>,
+    /// GitHub's hourly limit stopped the search early.
+    pub rate_limited: bool,
+}
+
+/// Find where installed skills came from: look for each one's SKILL.md in
+/// well-known skill repositories and the ones linked by hand, and link the
+/// skills it recognises. Skills that already name a source are left alone.
+pub fn find_skill_sources() -> Result<FindSourcesResult, String> {
+    find_skill_sources_with(&crate::scanner::candidate_skill_roots(), &default_data_root()?)
+}
+
+fn find_skill_sources_with(roots: &[PathBuf], data_root: &Path) -> Result<FindSourcesResult, String> {
+    let installed = unsourced_skills(roots);
+    let repositories = series::candidate_repositories(data_root);
+    let agent = build_agent()?;
+
+    let mut remotes = Vec::new();
+    let mut checked = Vec::new();
+    let mut failed = Vec::new();
+    let mut rate_limited = false;
+    for repository in &repositories {
+        let Some((owner, repo)) = repository.split_once('/') else {
+            continue;
+        };
+        match repo_skills(&agent, owner, repo) {
+            Ok(mut skills) => {
+                checked.push(repository.clone());
+                remotes.append(&mut skills);
+            }
+            Err(GithubError::RateLimited) => {
+                rate_limited = true;
+                break;
+            }
+            Err(_) => failed.push(repository.clone()),
+        }
+    }
+
+    // The connected account's own and starred repositories (already read).
+    for remote in crate::catalog::cached_remote_skills(data_root) {
+        if !checked.iter().any(|repo| repo.eq_ignore_ascii_case(&remote.repository)) {
+            remotes.push(remote);
+        }
+    }
+
+    let links = series::load_links(data_root);
+    let mut result = match_installed(&installed, &remotes, &links);
+
+    // Still unknown: search all of GitHub for them (code search needs sign-in).
+    let unknown: Vec<series::LocalSkill> = installed
+        .iter()
+        .filter(|skill| result.unmatched.contains(&skill.folder) || result.ambiguous.contains(&skill.folder))
+        .cloned()
+        .collect();
+    if !unknown.is_empty() && !rate_limited && github_token().is_some() {
+        let (found_remotes, searched, limited) = search_sources(&agent, &unknown, &checked);
+        rate_limited |= limited;
+        if !found_remotes.is_empty() {
+            let second = match_installed(&unknown, &found_remotes, &links);
+            let mut still_unknown = second.unmatched;
+            for found in second.found {
+                // Search turns up mirrors and collections, so a name alone is
+                // only trusted when the repository holds several of the skills.
+                if found.exact || shared_names(&found_remotes, &unknown, &found.repository) >= 2 {
+                    result.found.push(found);
+                } else {
+                    still_unknown.push(found.folder);
+                }
+            }
+            still_unknown.extend(second.ambiguous.iter().cloned());
+            still_unknown.sort_by_key(|folder| folder.to_lowercase());
+            result.unmatched = still_unknown;
+            result.ambiguous = Vec::new();
+        }
+        checked.extend(searched);
+    }
+
+    let entries: Vec<(String, String)> =
+        result.found.iter().map(|found| (found.folder.clone(), found.url.clone())).collect();
+    if !entries.is_empty() {
+        series::set_links(data_root, &entries)?;
+    }
+    result.repositories = checked;
+    result.failed = failed;
+    result.rate_limited = rate_limited;
+    Ok(result)
+}
+
+/// How many of `locals` have a skill folder of the same name in `repository`.
+fn shared_names(remotes: &[series::RemoteSkill], locals: &[series::LocalSkill], repository: &str) -> usize {
+    locals
+        .iter()
+        .filter(|local| {
+            remotes
+                .iter()
+                .any(|remote| remote.repository == repository && remote.folder.eq_ignore_ascii_case(&local.folder))
+        })
+        .count()
+}
+
+/// At most this many code searches per run (GitHub allows 10 a minute).
+const MAX_SEARCHES: usize = 8;
+/// At most this many repositories from the search results are read.
+const MAX_SEARCHED_REPOS: usize = 15;
+
+/// Search GitHub for repositories that publish the given skills, then read
+/// them. Skills that share a name prefix (`remotion-*`) are searched once.
+/// Returns the skills found, the repositories read, and whether a limit hit.
+fn search_sources(
+    agent: &ureq::Agent,
+    unknown: &[series::LocalSkill],
+    already_read: &[String],
+) -> (Vec<series::RemoteSkill>, Vec<String>, bool) {
+    let mut queries: Vec<&str> = Vec::new();
+    let mut prefixes: Vec<String> = Vec::new();
+    for skill in unknown {
+        let prefix = series_prefix(&skill.folder, unknown);
+        if let Some(prefix) = prefix {
+            if prefixes.contains(&prefix) {
+                continue;
+            }
+            prefixes.push(prefix);
+        }
+        queries.push(&skill.folder);
+    }
+
+    let mut repositories: Vec<String> = Vec::new();
+    let mut rate_limited = false;
+    for folder in queries.into_iter().take(MAX_SEARCHES) {
+        let query = format!("\"name: {folder}\" filename:SKILL.md");
+        let url = format!("https://api.github.com/search/code?per_page=20&q={}", encode_query(&query));
+        match api_get_json(agent, &url) {
+            Ok(json) => {
+                let items = json.get("items").and_then(|value| value.as_array()).cloned().unwrap_or_default();
+                for item in items {
+                    let Some(name) = item.pointer("/repository/full_name").and_then(|value| value.as_str()) else {
+                        continue;
+                    };
+                    let known = repositories.iter().chain(already_read).any(|repo| repo.eq_ignore_ascii_case(name));
+                    if !known && repositories.len() < MAX_SEARCHED_REPOS {
+                        repositories.push(name.to_string());
+                    }
+                }
+            }
+            Err(GithubError::RateLimited) => {
+                rate_limited = true;
+                break;
+            }
+            // Search's own (secondary) limit or a bad query: keep what we have.
+            Err(_) => break,
+        }
+    }
+
+    let remotes: std::sync::Mutex<Vec<series::RemoteSkill>> = std::sync::Mutex::new(Vec::new());
+    let read: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+    std::thread::scope(|scope| {
+        for repository in &repositories {
+            let (remotes, read) = (&remotes, &read);
+            scope.spawn(move || {
+                let Some((owner, repo)) = repository.split_once('/') else { return };
+                if let Ok(mut skills) = repo_skills(agent, owner, repo) {
+                    remotes.lock().unwrap().append(&mut skills);
+                    read.lock().unwrap().push(repository.clone());
+                }
+            });
+        }
+    });
+    // Keep the search order (best match first) for ties.
+    let mut remotes = remotes.into_inner().unwrap_or_default();
+    remotes.sort_by_key(|remote| repositories.iter().position(|repo| *repo == remote.repository));
+    (remotes, read.into_inner().unwrap_or_default(), rate_limited)
+}
+
+/// The part before the first `-` when another of `skills` shares it.
+fn series_prefix(folder: &str, skills: &[series::LocalSkill]) -> Option<String> {
+    let (prefix, _) = folder.split_once('-')?;
+    let prefix = format!("{}-", prefix.to_lowercase());
+    let shared = skills.iter().filter(|skill| skill.folder.to_lowercase().starts_with(&prefix)).count();
+    (shared >= 2).then_some(prefix)
+}
+
+/// Decide a source for each installed skill. Skills already linked keep their
+/// link unless identical content is found elsewhere.
+fn match_installed(
+    installed: &[series::LocalSkill],
+    remotes: &[series::RemoteSkill],
+    links: &series::SeriesLinks,
+) -> FindSourcesResult {
+    let mut result = FindSourcesResult {
+        found: Vec::new(),
+        unmatched: Vec::new(),
+        ambiguous: Vec::new(),
+        repositories: Vec::new(),
+        failed: Vec::new(),
+        rate_limited: false,
+    };
+    for local in installed {
+        let existing = series::linked_url(links, &local.folder);
+        let (index, exact) = match series::match_source(local, remotes) {
+            series::SourceMatch::Exact(index) => (index, true),
+            series::SourceMatch::ByName(index) if existing.is_none() => (index, false),
+            series::SourceMatch::ByName(_) => continue,
+            series::SourceMatch::Ambiguous if existing.is_none() => {
+                result.ambiguous.push(local.folder.clone());
+                continue;
+            }
+            series::SourceMatch::None if existing.is_none() => {
+                result.unmatched.push(local.folder.clone());
+                continue;
+            }
+            _ => continue,
+        };
+        let remote = &remotes[index];
+        if existing.as_deref() == Some(remote.url.as_str()) {
+            continue;
+        }
+        result.found.push(FoundSource {
+            folder: local.folder.clone(),
+            repository: remote.repository.clone(),
+            url: remote.url.clone(),
+            exact,
+        });
+    }
+
+    // A name found in several repositories most likely came with its
+    // siblings: pick the repository most other skills were found in.
+    let ambiguous = std::mem::take(&mut result.ambiguous);
+    for folder in ambiguous {
+        let count = |repository: &str| result.found.iter().filter(|found| found.repository == repository).count();
+        let mut options: Vec<(usize, &series::RemoteSkill)> = remotes
+            .iter()
+            .filter(|remote| remote.folder.eq_ignore_ascii_case(&folder))
+            .map(|remote| (count(&remote.repository), remote))
+            .collect();
+        options.sort_by(|left, right| right.0.cmp(&left.0));
+        match options.as_slice() {
+            [(best, remote), rest @ ..] if *best > 0 && rest.iter().all(|(other, _)| other < best) => {
+                let remote = (*remote).clone();
+                result.found.push(FoundSource { folder, repository: remote.repository, url: remote.url, exact: false });
+            }
+            _ => result.ambiguous.push(folder),
+        }
+    }
+    result
+}
+
+/// The skill folders of a repository's default branch (two API requests).
+fn repo_skills(agent: &ureq::Agent, owner: &str, repo: &str) -> Result<Vec<series::RemoteSkill>, GithubError> {
+    let branch = resolve_default_branch(agent, owner, repo)?;
+    let (files, _truncated) = repo_files(agent, owner, repo, &branch)?;
+    let repository = format!("{owner}/{repo}");
+    Ok(crate::catalog::skills_in_files(&files, owner, repo, &branch)
+        .into_iter()
+        .map(|skill| series::RemoteSkill {
+            repository: repository.clone(),
+            folder: skill.folder,
+            url: skill.url,
+            blob: skill.blob,
+        })
+        .collect())
+}
+
+/// Installed skill folders that have no source yet: not added from GitHub and
+/// no repository named in SKILL.md. Copies with the same folder name (the same
+/// skill in several tools) are merged.
+fn unsourced_skills(roots: &[PathBuf]) -> Vec<series::LocalSkill> {
+    let mut skills: Vec<series::LocalSkill> = Vec::new();
+    let mut sourced: Vec<String> = Vec::new();
+    for entry in roots.iter().filter_map(|root| fs::read_dir(root).ok()).flat_map(|entries| entries.flatten()) {
+        let dir = entry.path();
+        let folder = entry.file_name().to_string_lossy().to_string();
+        let Ok(bytes) = fs::read(dir.join("SKILL.md")) else {
+            continue;
+        };
+        if folder.starts_with('.') {
+            continue;
+        }
+        if read_source_file(&dir).is_some() || detect_github_url(&dir).is_some() {
+            sourced.push(folder.to_lowercase());
+            continue;
+        }
+        let blobs = series::local_blob_ids(&bytes);
+        match skills.iter_mut().find(|skill| skill.folder.eq_ignore_ascii_case(&folder)) {
+            Some(skill) => skill.blobs.extend(blobs),
+            None => skills.push(series::LocalSkill { folder, blobs }),
+        }
+    }
+    skills.retain(|skill| !sourced.contains(&skill.folder.to_lowercase()));
+    skills.sort_by_key(|skill| skill.folder.to_lowercase());
+    skills
 }
 
 fn github_url_in_line(line: &str) -> Option<String> {
@@ -877,7 +1284,7 @@ fn short_sha(sha: &str) -> String {
     sha.chars().take(7).collect()
 }
 
-fn build_agent() -> Result<ureq::Agent, String> {
+pub(crate) fn build_agent() -> Result<ureq::Agent, String> {
     let connector =
         native_tls::TlsConnector::new().map_err(|error| format!("Could not initialize TLS: {error}"))?;
     Ok(ureq::AgentBuilder::new()
@@ -887,7 +1294,7 @@ fn build_agent() -> Result<ureq::Agent, String> {
         .build())
 }
 
-fn resolve_default_branch(
+pub(crate) fn resolve_default_branch(
     agent: &ureq::Agent,
     owner: &str,
     repo: &str,
@@ -902,7 +1309,7 @@ fn resolve_default_branch(
         })
 }
 
-fn latest_commit(
+pub(crate) fn latest_commit(
     agent: &ureq::Agent,
     owner: &str,
     repo: &str,
@@ -936,7 +1343,7 @@ fn latest_commit(
         .ok_or_else(|| GithubError::Other("GitHub commit response was missing a sha.".to_string()))
 }
 
-fn download_zipball(
+pub(crate) fn download_zipball(
     agent: &ureq::Agent,
     owner: &str,
     repo: &str,
@@ -971,7 +1378,16 @@ fn download_zipball(
     Ok(buffer)
 }
 
-fn api_get_json(agent: &ureq::Agent, url: &str) -> Result<serde_json::Value, GithubError> {
+pub(crate) fn api_get_json(agent: &ureq::Agent, url: &str) -> Result<serde_json::Value, GithubError> {
+    api_get_json_with_token(agent, url, github_token().as_deref())
+}
+
+/// GET a GitHub API URL as JSON, with an explicit token (or none).
+pub(crate) fn api_get_json_with_token(
+    agent: &ureq::Agent,
+    url: &str,
+    token: Option<&str>,
+) -> Result<serde_json::Value, GithubError> {
     let mut request = agent
         .get(url)
         .set("User-Agent", USER_AGENT)
@@ -979,7 +1395,7 @@ fn api_get_json(agent: &ureq::Agent, url: &str) -> Result<serde_json::Value, Git
         .set("X-GitHub-Api-Version", "2022-11-28");
     // An optional token raises the API limit from 60 to 5000 requests/hour. It
     // is only sent to api.github.com (ureq drops auth headers on redirects).
-    if let Some(token) = github_token() {
+    if let Some(token) = token {
         request = request.set("Authorization", &format!("Bearer {token}"));
     }
     let response = request.call().map_err(classify_ureq_error)?;
@@ -994,25 +1410,22 @@ pub(crate) fn has_github_token() -> bool {
     github_token().is_some()
 }
 
-fn github_token() -> Option<String> {
-    ["SKILLS_MANAGE_GITHUB_TOKEN", "GITHUB_TOKEN", "GH_TOKEN"]
-        .iter()
-        .filter_map(|name| std::env::var(name).ok())
-        .map(|value| value.trim().to_string())
-        .find(|value| !value.is_empty())
+/// A token from the environment, else the account connected in the app.
+pub(crate) fn github_token() -> Option<String> {
+    crate::account::environment_token().or_else(crate::account::stored_token)
 }
 
 /// Classified failure from a GitHub request, so callers can distinguish a
 /// missing/moved source and a rate limit from a generic error.
 #[derive(Debug)]
-enum GithubError {
+pub(crate) enum GithubError {
     NotFound,
     RateLimited,
     Other(String),
 }
 
 impl GithubError {
-    fn message(&self) -> String {
+    pub(crate) fn message(&self) -> String {
         match self {
             GithubError::NotFound => {
                 "Repository or path not found. Only public repositories are supported.".to_string()
@@ -1051,7 +1464,7 @@ fn classify_ureq_error(error: ureq::Error) -> GithubError {
 /// Extract just `subdir` (or the whole repo when empty) from a downloaded
 /// zipball into `dest`. The zipball's top-level folder name is read from the
 /// archive rather than reconstructed, and every entry path is validated.
-fn extract_subdir_from_zip(zip_bytes: &[u8], subdir: &str, dest: &Path) -> Result<(), String> {
+pub(crate) fn extract_subdir_from_zip(zip_bytes: &[u8], subdir: &str, dest: &Path) -> Result<(), String> {
     let reader = Cursor::new(zip_bytes);
     let mut archive =
         ZipArchive::new(reader).map_err(|error| format!("Could not read the downloaded archive: {error}"))?;
@@ -1146,7 +1559,7 @@ fn write_source_file(library_path: &Path, source: &GithubSource) -> Result<(), S
         .map_err(|error| format!("Could not write source metadata: {error}"))
 }
 
-fn canonical_url(owner: &str, repo: &str, git_ref: &str, subdir: &str) -> String {
+pub(crate) fn canonical_url(owner: &str, repo: &str, git_ref: &str, subdir: &str) -> String {
     if subdir.is_empty() {
         format!("https://github.com/{owner}/{repo}/tree/{git_ref}")
     } else {
@@ -1537,6 +1950,174 @@ mod tests {
     // Exercises the live network path (TLS, GitHub API, codeload download, zip
     // extraction) against GitHub's canonical test repo. Ignored by default;
     // run manually with `cargo test -- --ignored`.
+    #[test]
+    fn find_sources_skips_skills_that_already_name_one_and_merges_copies() {
+        let codex = unique_temp_dir("unsourced-codex");
+        let claude = unique_temp_dir("unsourced-claude");
+        for (root, folder, body) in [
+            (&codex, "tdd", "---\nname: tdd\n---\nv1\n"),
+            (&claude, "TDD", "---\nname: tdd\n---\nv2\n"),
+            (&codex, "reach", "---\nname: reach\nhomepage: https://github.com/a/reach\n---\n"),
+            (&codex, ".system", "---\nname: hidden\n---\n"),
+        ] {
+            fs::create_dir_all(root.join(folder)).unwrap();
+            fs::write(root.join(folder).join("SKILL.md"), body).unwrap();
+        }
+        let skills = unsourced_skills(&[codex.clone(), claude.clone()]);
+        let _ = fs::remove_dir_all(codex);
+        let _ = fs::remove_dir_all(claude);
+
+        assert_eq!(skills.len(), 1);
+        assert_eq!(skills[0].folder.to_lowercase(), "tdd");
+        assert_eq!(skills[0].blobs.len(), 2);
+    }
+
+    #[test]
+    fn find_sources_keeps_hand_made_links_unless_content_is_identical_elsewhere() {
+        let remote = |repository: &str, folder: &str, blob: &str| series::RemoteSkill {
+            repository: repository.to_string(),
+            folder: folder.to_string(),
+            url: format!("https://github.com/{repository}/tree/main/{folder}"),
+            blob: blob.to_string(),
+        };
+        let remotes = vec![remote("a/one", "tdd", "x"), remote("b/two", "docx", "y"), remote("c/three", "lone", "z")];
+        let local = |folder: &str, blob: &str| series::LocalSkill { folder: folder.to_string(), blobs: vec![blob.to_string()] };
+        let mut links = series::SeriesLinks::new();
+        links.insert("tdd".to_string(), "https://github.com/mine/fork/tree/main/tdd".to_string());
+        links.insert("docx".to_string(), "https://github.com/mine/fork/tree/main/docx".to_string());
+
+        let result = match_installed(
+            &[local("tdd", "old"), local("docx", "y"), local("lone", "edited"), local("mystery", "?")],
+            &remotes,
+            &links,
+        );
+
+        let found: Vec<(&str, bool)> = result.found.iter().map(|item| (item.folder.as_str(), item.exact)).collect();
+        assert_eq!(found, vec![("docx", true), ("lone", false)]);
+        assert_eq!(result.unmatched, vec!["mystery".to_string()]);
+    }
+
+    #[test]
+    fn trusts_a_body_link_only_to_the_skills_own_repository() {
+        let root = unique_temp_dir("detect-body");
+        let dir = root.join("wallstreet-explainer");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(
+            dir.join("SKILL.md"),
+            "---
+name: wallstreet-explainer
+---
+Uses https://github.com/babel/babel.
+Install: git clone https://github.com/HeyChengC/wallstreet-explainer.git
+",
+        )
+        .unwrap();
+        assert_eq!(
+            detect_github_url(&dir).as_deref(),
+            Some("https://github.com/HeyChengC/wallstreet-explainer")
+        );
+        fs::write(dir.join("SKILL.md"), "---
+name: x
+---
+See https://github.com/babel/babel
+").unwrap();
+        assert_eq!(detect_github_url(&dir), None);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn skills_sharing_a_prefix_are_searched_once() {
+        let local = |folder: &str| series::LocalSkill { folder: folder.to_string(), blobs: Vec::new() };
+        let skills = [local("remotion-render"), local("Remotion-docs"), local("wallstreet-explainer"), local("solo")];
+        assert_eq!(series_prefix("remotion-render", &skills).as_deref(), Some("remotion-"));
+        assert_eq!(series_prefix("wallstreet-explainer", &skills), None);
+        assert_eq!(series_prefix("solo", &skills), None);
+    }
+
+    #[test]
+    fn a_name_in_several_repositories_goes_with_its_siblings() {
+        let remote = |repository: &str, folder: &str| series::RemoteSkill {
+            repository: repository.to_string(),
+            folder: folder.to_string(),
+            url: format!("https://github.com/{repository}/tree/main/{folder}"),
+            blob: format!("{repository}/{folder}"),
+        };
+        let remotes = vec![
+            remote("anthropics/skills", "pdf"),
+            remote("anthropics/skills", "docx"),
+            remote("openai/skills", "pdf"),
+            remote("openai/skills", "sheets"),
+        ];
+        let local = |folder: &str| series::LocalSkill { folder: folder.to_string(), blobs: vec!["edited".to_string()] };
+
+        let result = match_installed(&[local("docx"), local("pdf")], &remotes, &series::SeriesLinks::new());
+        let pdf = result.found.iter().find(|found| found.folder == "pdf").unwrap();
+        assert_eq!(pdf.repository, "anthropics/skills");
+        assert!(result.ambiguous.is_empty());
+
+        // With no siblings to go by, it stays undecided.
+        let alone = match_installed(&[local("pdf")], &remotes, &series::SeriesLinks::new());
+        assert_eq!(alone.ambiguous, vec!["pdf".to_string()]);
+    }
+
+    #[test]
+    #[ignore = "hits the live GitHub API"]
+    fn live_imports_several_skills_from_one_repository() {
+        let data_root = unique_temp_dir("live-batch");
+        let agent = build_agent().unwrap();
+        let mut archives = Vec::new();
+        let mut imported = Vec::new();
+        for url in [
+            "https://github.com/anthropics/skills/tree/main/skills/pdf",
+            "https://github.com/anthropics/skills/tree/main/skills/docx",
+        ] {
+            let parsed = parse_github_url(url).unwrap();
+            let (git_ref, subdir, commit) = resolve_ref_and_commit(&agent, &parsed).unwrap();
+            if archives.is_empty() {
+                let head = latest_commit(&agent, &parsed.owner, &parsed.repo, &git_ref, "").unwrap();
+                archives.push(download_zipball(&agent, &parsed.owner, &parsed.repo, &head).unwrap());
+            }
+            imported.push(install_from_zip(&archives[0], &parsed, &git_ref, &subdir, &commit, &data_root).unwrap());
+        }
+        assert_eq!(archives.len(), 1);
+        for result in &imported {
+            assert!(Path::new(&result.library_path).join("SKILL.md").is_file());
+            // Recorded per folder, so an update check finds nothing new.
+            let source = read_source_file(Path::new(&result.library_path)).unwrap();
+            let latest = latest_commit(&agent, "anthropics", "skills", &source.git_ref, &source.subdir).unwrap();
+            assert_eq!(source.synced_commit, latest);
+        }
+        let _ = fs::remove_dir_all(data_root);
+    }
+
+    #[test]
+    #[ignore = "hits the live GitHub API"]
+    fn live_finds_sources_in_the_known_repositories() {
+        let root = unique_temp_dir("live-find-root");
+        let data_root = unique_temp_dir("live-find-data");
+        for (folder, body) in [
+            ("grill-me", "---\nname: grill-me\n---\nan edited copy\n"),
+            ("pdf", "---\nname: pdf\n---\nan edited copy\n"),
+            ("not-a-published-skill-xyz", "---\nname: x\n---\n"),
+        ] {
+            fs::create_dir_all(root.join(folder)).unwrap();
+            fs::write(root.join(folder).join("SKILL.md"), body).unwrap();
+        }
+
+        let result = find_skill_sources_with(&[root.clone()], &data_root).unwrap();
+        let _ = fs::remove_dir_all(&root);
+
+        assert!(!result.rate_limited, "rate limited");
+        assert!(result.repositories.iter().any(|repo| repo == "mattpocock/skills"), "{:?}", result.failed);
+        assert_eq!(result.found.len(), 1);
+        assert_eq!(result.found[0].repository, "mattpocock/skills");
+        assert!(!result.found[0].exact);
+        assert_eq!(result.ambiguous, vec!["pdf".to_string()]);
+        assert_eq!(result.unmatched, vec!["not-a-published-skill-xyz".to_string()]);
+        assert!(series::linked_url(&series::load_links(&data_root), "grill-me").is_some());
+        let _ = fs::remove_dir_all(data_root);
+    }
+
     #[test]
     #[ignore = "hits the live GitHub API"]
     fn live_links_a_skill_series_from_one_skill_url() {

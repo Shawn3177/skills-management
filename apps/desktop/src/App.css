@@ -200,41 +200,10 @@ a:hover {
   white-space: nowrap;
 }
 
-.tool-tabs {
-  display: inline-flex;
-  gap: 2px;
-  padding: 4px;
-  border-radius: 12px;
-  background: var(--soft);
-}
 
-.tool-tabs button {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  min-height: 32px;
-  padding: 0 12px 0 10px;
-  border: 0;
-  border-radius: 9px;
-  background: transparent;
-  color: var(--muted);
-  font-weight: 500;
-  white-space: nowrap;
-}
 
-.tool-tabs button:hover:not(:disabled) {
-  color: var(--text);
-}
 
-.tool-tabs button.active {
-  background: var(--surface);
-  color: var(--text);
-  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.12);
-}
 
-.tool-tabs button:disabled {
-  color: #b6bac2;
-}
 
 .tab-count {
   min-width: 12px;
@@ -243,30 +212,6 @@ a:hover {
   font-variant-numeric: tabular-nums;
 }
 
-.tool-tabs button.active .tab-count {
-  color: var(--accent);
-}
-
-.tool-mark {
-  display: inline-flex;
-  flex: none;
-  align-items: center;
-  justify-content: center;
-  width: 18px;
-  height: 18px;
-  border-radius: 5px;
-  color: #ffffff;
-  font-size: 10.5px;
-  font-weight: 700;
-}
-
-.tool-mark.round {
-  border-radius: 999px;
-}
-
-.tool-mark.all {
-  background: var(--accent);
-}
 
 .icon-button {
   position: relative;
@@ -404,11 +349,11 @@ a:hover {
   padding: 20px var(--gutter) 24px;
 }
 
+/* Full width like the main screen, so a maximized window has no empty side. */
 .page-body.narrow {
   display: flex;
   flex-direction: column;
   gap: 14px;
-  max-width: 860px;
 }
 
 .page-footer {
@@ -1305,6 +1250,676 @@ a:hover {
 
 @media (prefers-reduced-motion: reduce) {
   .series-chevron {
+    transition: none;
+  }
+}
+
+.link-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.link-manual {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: 6px;
+  padding-top: 10px;
+  border-top: 1px solid var(--accent-line);
+}
+
+.divider-action {
+  order: 2;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+  font-size: 12px;
+}
+
+.divider-action:hover:not(:disabled) {
+  text-decoration: underline;
+}
+
+.divider-action:disabled {
+  color: var(--subtle);
+}
+
+/* ---------- GitHub account and "My GitHub" ---------- */
+
+.star-mark {
+  flex: none;
+  color: #d97706;
+  fill: #fbbf24;
+}
+
+.token-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.token-row .text-input {
+  flex: 1 1 260px;
+  min-width: 0;
+}
+
+.mine-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.search-field.small {
+  width: 180px;
+  min-height: 28px;
+}
+
+.segmented.small button {
+  min-height: 24px;
+  padding: 0 9px;
+  font-size: 12px;
+}
+
+.mine-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.mine-repo {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-card);
+  background: var(--surface);
+}
+
+.mine-repo-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px 6px 14px;
+}
+
+.mine-repo-head .tag svg {
+  vertical-align: -1px;
+}
+
+.mine-skills {
+  margin: 0 12px 12px 40px;
+}
+
+.account-card {
+  flex-direction: row;
+  align-items: center;
+  gap: 14px;
+  padding: 14px 18px;
+}
+
+.account-card .card-main strong {
+  font-size: 15px;
+}
+
+.avatar {
+  flex: none;
+  width: 44px;
+  height: 44px;
+  border: 1px solid var(--line);
+  border-radius: 50%;
+}
+
+.series-toggle.static {
+  cursor: default;
+  padding-left: 22px;
+}
+
+.mine-repo.plain {
+  background: #fcfcfd;
+}
+
+.mine-details {
+  color: var(--subtle);
+  font-size: 12px;
+}
+
+.skill-count {
+  color: var(--accent);
+  font-weight: 500;
+}
+
+.series-toggle.compact {
+  flex: none;
+  padding: 4px;
+}
+
+.series-head .card-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.link-icon {
+  display: inline-block;
+  margin-left: 4px;
+  vertical-align: -1px;
+  opacity: 0.7;
+}
+
+.linked-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px 4px 2px 10px;
+  border: 1px solid var(--accent-line);
+  border-radius: 999px;
+  background: var(--surface);
+  font-size: 12px;
+}
+
+.icon-button.tiny {
+  width: 22px;
+  height: 22px;
+}
+
+/* ---------- Tool logos ---------- */
+
+.tool-logo {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  object-fit: contain;
+}
+
+.tool-pill .tool-logo {
+  width: 16px;
+  height: 16px;
+}
+
+/* Off / not supported yet: the logo fades to grey. */
+.tool-logo.dim {
+  filter: grayscale(1);
+  opacity: 0.45;
+}
+
+/* Where a tool-folder skill lives: logos, not buttons. */
+.tool-pills.static .tool-pill {
+  cursor: default;
+}
+
+.divider-label .add-all {
+  order: 3;
+}
+
+.confirm-group.add-all {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-2);
+}
+
+/* The add-to-library icon button next to a skill's platform logos. */
+.icon-button.add-icon {
+  width: 32px;
+  height: 32px;
+  border: 1px solid var(--accent-line);
+  color: var(--accent);
+}
+
+.icon-button.add-icon:hover:not(:disabled) {
+  background: var(--accent-soft);
+}
+
+.series-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.skill-card.local .tool-pills + .add-icon {
+  margin-left: -4px;
+}
+
+/* ---------- Skill details ---------- */
+
+.skill-card.clickable {
+  cursor: pointer;
+}
+
+.github-button img {
+  display: block;
+  opacity: 0.85;
+}
+
+.icon-button.github-button:hover img {
+  opacity: 1;
+}
+
+.detail-head {
+  gap: 14px;
+}
+
+.detail-title {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.detail-title .card-main strong {
+  font-size: 17px;
+  font-weight: 600;
+}
+
+.detail-places {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.detail-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-left: auto;
+}
+
+.detail-description {
+  color: var(--text-2);
+  line-height: 1.6;
+}
+
+.detail-facts {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 8px 18px;
+  padding-top: 12px;
+  border-top: 1px solid #f1f2f4;
+}
+
+.detail-facts dt {
+  color: var(--muted);
+}
+
+.detail-facts dd {
+  overflow-wrap: anywhere;
+}
+
+.detail-files {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.chip.static {
+  padding: 2px 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--soft);
+  font-size: 12px;
+}
+
+.markdown-body {
+  color: var(--text-2);
+  line-height: 1.7;
+  overflow-wrap: anywhere;
+}
+
+.markdown-body > * + * {
+  margin-top: 10px;
+}
+
+.markdown-body h1,
+.markdown-body h2,
+.markdown-body h3,
+.markdown-body h4 {
+  margin-top: 18px;
+  color: var(--text);
+  font-weight: 600;
+}
+
+.markdown-body h1 {
+  font-size: 18px;
+}
+
+.markdown-body h2 {
+  font-size: 16px;
+}
+
+.markdown-body h3,
+.markdown-body h4 {
+  font-size: 14px;
+}
+
+.markdown-body ul,
+.markdown-body ol {
+  padding-left: 22px;
+}
+
+.markdown-body ul {
+  list-style: disc;
+}
+
+.markdown-body ol {
+  list-style: decimal;
+}
+
+.markdown-body a {
+  color: var(--accent);
+}
+
+.markdown-body code {
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: var(--soft);
+  font-family: var(--mono);
+  font-size: 12.5px;
+}
+
+.markdown-body pre {
+  overflow-x: auto;
+  padding: 12px 14px;
+  border-radius: 8px;
+  background: #f6f7f9;
+}
+
+.markdown-body pre code {
+  padding: 0;
+  background: transparent;
+}
+
+.markdown-body blockquote {
+  padding-left: 12px;
+  border-left: 3px solid var(--line);
+  color: var(--muted);
+}
+
+.markdown-body table {
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.markdown-body th,
+.markdown-body td {
+  padding: 6px 10px;
+  border: 1px solid var(--line);
+}
+
+/* ---------- Simpler cards: logos only ---------- */
+
+/* Library toggles: a logo in a round button; colour = on, grey = off. */
+.tool-pill.icon {
+  justify-content: center;
+  width: 32px;
+  min-height: 32px;
+  padding: 0;
+  border: 1px solid transparent;
+  background: transparent;
+}
+
+.tool-pill.icon.on {
+  border-color: transparent;
+  background: transparent;
+}
+
+.tool-pill.icon:hover:not(:disabled) {
+  filter: none;
+  background: var(--soft);
+}
+
+.tool-pill.icon.conflict {
+  position: relative;
+  border: 1px dashed #f3c27a;
+  background: var(--warning-soft);
+}
+
+.tool-pill.icon:disabled {
+  border-color: transparent;
+  background: transparent;
+}
+
+.conflict-dot {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #f59e0b;
+}
+
+/* Where a tool-folder skill lives. */
+.platform-icons {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 8px;
+  padding: 0 4px;
+}
+
+.platform-icons > span {
+  display: inline-flex;
+}
+
+/* The line under a name is the skill's description. */
+.skill-card .card-sub {
+  max-width: 62ch;
+}
+
+
+
+/* ---------- Settings: tools ---------- */
+
+.tool-list {
+  display: flex;
+  flex-direction: column;
+}
+
+.tool-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 48px;
+}
+
+.tool-row + .tool-row {
+  border-top: 1px solid #f1f2f4;
+}
+
+.tool-row .setting-label {
+  flex: 1;
+}
+
+.switch {
+  position: relative;
+  display: inline-flex;
+  flex: none;
+}
+
+.switch input {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.switch span {
+  width: 36px;
+  height: 20px;
+  border-radius: 999px;
+  background: var(--line-strong);
+  transition: background 140ms ease;
+}
+
+.switch span::after {
+  content: "";
+  display: block;
+  width: 16px;
+  height: 16px;
+  margin: 2px;
+  border-radius: 50%;
+  background: #ffffff;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.2);
+  transition: transform 140ms ease;
+}
+
+.switch input:checked + span {
+  background: var(--accent);
+}
+
+.switch input:checked + span::after {
+  transform: translateX(16px);
+}
+
+.switch input:focus-visible + span {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* ---------- Tool switcher (top right) ---------- */
+
+.tool-switcher {
+  position: relative;
+}
+
+.switcher-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 38px;
+  padding: 0 10px 0 12px;
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  background: var(--surface);
+  color: var(--text);
+  font-weight: 500;
+  transition:
+    border-color 140ms ease,
+    box-shadow 140ms ease;
+}
+
+.switcher-trigger:hover,
+.tool-switcher.open .switcher-trigger {
+  border-color: var(--accent-line);
+  box-shadow: 0 2px 8px rgba(37, 99, 235, 0.08);
+}
+
+.switcher-current {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  animation: switcher-fade 180ms ease-out;
+}
+
+.switcher-chevron {
+  color: var(--subtle);
+  transition: transform 180ms ease;
+}
+
+.tool-switcher.open .switcher-chevron {
+  transform: rotate(180deg);
+}
+
+.switcher-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  width: 240px;
+  max-height: min(70vh, 520px);
+  overflow-y: auto;
+  padding: 6px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--surface);
+  box-shadow: 0 14px 34px rgba(15, 23, 42, 0.16);
+  transform-origin: top right;
+  animation: switcher-menu-in 160ms ease-out;
+}
+
+.switcher-option {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 36px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  transition: background 120ms ease;
+}
+
+.switcher-option:hover {
+  background: var(--soft);
+}
+
+.switcher-option.selected {
+  background: var(--accent-soft);
+}
+
+.switcher-option.dim .switcher-name {
+  color: var(--muted);
+}
+
+.switcher-name {
+  flex: 1;
+}
+
+.switcher-check {
+  visibility: hidden;
+  color: var(--accent);
+}
+
+.switcher-option.selected .switcher-check {
+  visibility: visible;
+}
+
+.switcher-divider {
+  height: 1px;
+  margin: 4px 6px;
+  background: #f1f2f4;
+}
+
+.switcher-group {
+  padding: 8px 10px 4px;
+  color: var(--subtle);
+  font-size: 12px;
+}
+
+@keyframes switcher-menu-in {
+  from {
+    opacity: 0;
+    transform: translateY(-6px) scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes switcher-fade {
+  from {
+    opacity: 0;
+    transform: translateY(3px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .switcher-menu,
+  .switcher-current {
+    animation: none;
+  }
+
+  .switcher-chevron,
+  .switcher-trigger,
+  .switcher-option {
     transition: none;
   }
 }

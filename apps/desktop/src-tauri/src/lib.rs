@@ -1,6 +1,8 @@
 use serde::Serialize;
 use std::sync::Mutex;
 
+mod account;
+mod catalog;
 mod fs_ops;
 mod github;
 mod library;
@@ -12,8 +14,8 @@ mod targets;
 mod trash;
 use github::{
     check_skill_updates as check_skill_updates_impl, import_from_github as import_from_github_impl,
-    link_github_series as link_github_series_impl,
-    update_skill_from_github as update_skill_from_github_impl, GithubImportResult, LinkSeriesResult,
+    find_skill_sources as find_skill_sources_impl, import_github_skills as import_github_skills_impl, link_github_series as link_github_series_impl,
+    update_skill_from_github as update_skill_from_github_impl, BatchImportResult, FindSourcesResult, GithubImportResult, LinkSeriesResult,
     SkillUpdateStatus, UpdateResult,
 };
 use library::{import_skill_to_library as import_skill_to_library_impl, ImportResult};
@@ -46,6 +48,8 @@ pub struct AppStatus {
     github_token_configured: bool,
     /// Lets the UI show paths as `~/…`.
     home_dir: String,
+    /// Tools whose config folder exists, so the UI only shows those.
+    installed_tools: Vec<String>,
 }
 
 pub fn default_app_status() -> AppStatus {
@@ -62,6 +66,7 @@ pub fn default_app_status() -> AppStatus {
         home_dir: fs_ops::home_dir()
             .map(|path| path.display().to_string())
             .unwrap_or_default(),
+        installed_tools: targets::installed_tool_ids(),
     }
 }
 
@@ -146,6 +151,46 @@ async fn link_github_series(url: String) -> Result<LinkSeriesResult, String> {
 }
 
 #[tauri::command]
+async fn import_github_skills(urls: Vec<String>) -> Result<BatchImportResult, String> {
+    run_write(move || import_github_skills_impl(urls)).await
+}
+
+#[tauri::command]
+async fn github_account() -> Result<account::GithubAccount, String> {
+    run_blocking(account::github_account).await
+}
+
+#[tauri::command]
+async fn connect_github_token(token: String) -> Result<account::GithubAccount, String> {
+    run_write(move || account::connect_github_token(token)).await
+}
+
+#[tauri::command]
+async fn connect_github_cli() -> Result<account::GithubAccount, String> {
+    run_write(account::connect_github_cli).await
+}
+
+#[tauri::command]
+async fn disconnect_github() -> Result<(), String> {
+    run_write(account::disconnect_github).await
+}
+
+#[tauri::command]
+async fn github_catalog(refresh: bool) -> Result<Option<catalog::GithubCatalog>, String> {
+    run_write(move || catalog::github_catalog(refresh)).await
+}
+
+#[tauri::command]
+async fn read_skill_markdown(skill_path: String) -> Result<String, String> {
+    run_blocking(move || scanner::read_skill_markdown(&skill_path)).await
+}
+
+#[tauri::command]
+async fn find_skill_sources() -> Result<FindSourcesResult, String> {
+    run_write(find_skill_sources_impl).await
+}
+
+#[tauri::command]
 async fn unlink_github_series(repository: String) -> Result<usize, String> {
     run_write(move || series::unlink_github_series(repository)).await
 }
@@ -217,6 +262,14 @@ pub fn run() {
             update_skill_metadata,
             import_from_github,
             link_github_series,
+            find_skill_sources,
+            read_skill_markdown,
+            import_github_skills,
+            github_account,
+            connect_github_token,
+            connect_github_cli,
+            disconnect_github,
+            github_catalog,
             unlink_github_series,
             check_skill_updates,
             update_skill_from_github,

@@ -8,13 +8,42 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
-/// Every tool the UI knows about, in display order. VS Code is listed but not
-/// yet toggleable (see `toggleable_target_ids`).
-pub const KNOWN_TARGETS: [(&str, &str); 3] = [
-    ("codex", "Codex"),
-    ("claude-code", "Claude Code"),
-    ("vs-code", "VS Code"),
+/// Every tool whose personal skills folder Skills Manage manages, in display
+/// order: (id, name, config folder in the home directory). Its skills live in
+/// `~/<folder>/skills`, each in a folder with a SKILL.md. Paths follow each
+/// tool's own documentation, or (WorkBuddy) the folder the app creates itself.
+pub const TOOLS: [(&str, &str, &str); 12] = [
+    ("claude-code", "Claude Code", ".claude"),
+    ("codex", "Codex", ".codex"),
+    ("gemini-cli", "Gemini CLI", ".gemini"),
+    ("grok-build", "Grok Build", ".grok"),
+    ("opencode", "OpenCode", ".config/opencode"),
+    ("openclaw", "OpenClaw", ".openclaw"),
+    ("hermes", "Hermes", ".hermes"),
+    ("pi", "Pi", ".pi/agent"),
+    ("qwen-code", "Qwen Code", ".qwen"),
+    ("qoder", "Qoder", ".qoder"),
+    ("codebuddy", "CodeBuddy", ".codebuddy"),
+    ("workbuddy", "WorkBuddy", ".workbuddy"),
 ];
+
+const TOOL_IDS: [&str; 12] = [
+    "claude-code",
+    "codex",
+    "gemini-cli",
+    "grok-build",
+    "opencode",
+    "openclaw",
+    "hermes",
+    "pi",
+    "qwen-code",
+    "qoder",
+    "codebuddy",
+    "workbuddy",
+];
+
+/// Tools that keep skills in category folders (`skills/<category>/<skill>`).
+pub const CATEGORIZED_TOOLS: [&str; 1] = ["hermes"];
 
 const STAGING_PREFIX: &str = ".skills-manage-staging";
 /// Staging folders older than this are leftovers from a crashed enable.
@@ -212,9 +241,21 @@ pub fn is_managed_target_copy(target_dir: &Path, source_path: &Path, target_id: 
     marker_matches(target_dir, &source_canonical, target_id)
 }
 
-/// Target ids that support real enable/disable (VS Code is still pending).
+/// Ids of every tool skills can be enabled in (see `TOOLS`).
 pub fn toggleable_target_ids() -> &'static [&'static str] {
-    &["codex", "claude-code"]
+    &TOOL_IDS
+}
+
+/// Tools that look installed: their config folder exists in the home folder.
+pub fn installed_tool_ids() -> Vec<String> {
+    let Some(home) = home_dir() else {
+        return Vec::new();
+    };
+    TOOLS
+        .iter()
+        .filter(|(_, _, folder)| home.join(folder).is_dir())
+        .map(|(id, _, _)| id.to_string())
+        .collect()
 }
 
 /// The real, home-based skills-folder root for a toggleable target.
@@ -437,19 +478,11 @@ fn validate_library_source(source_path: &Path, data_root: &Path) -> Result<PathB
 fn target_profile(target_id: &str) -> Result<TargetProfile, String> {
     let home = home_dir().ok_or_else(|| "Could not determine home directory.".to_string())?;
 
-    match target_id {
-        "codex" => Ok(TargetProfile {
-            id: "codex",
-            name: "Codex",
-            root: home.join(".codex").join("skills"),
-        }),
-        "claude-code" => Ok(TargetProfile {
-            id: "claude-code",
-            name: "Claude Code",
-            root: home.join(".claude").join("skills"),
-        }),
-        other => Err(format!("Unsupported target id: {other}")),
-    }
+    let (id, name, folder) = TOOLS
+        .iter()
+        .find(|(id, _, _)| *id == target_id)
+        .ok_or_else(|| format!("Unsupported target id: {target_id}"))?;
+    Ok(TargetProfile { id, name, root: home.join(folder).join("skills") })
 }
 
 fn target_profile_with_root(target_id: &str, root: &Path) -> Result<TargetProfile, String> {
@@ -1003,5 +1036,17 @@ mod tests {
         )
         .unwrap();
         skill_dir
+    }
+
+    #[test]
+    fn every_tool_is_toggleable_and_has_its_own_skills_folder() {
+        assert_eq!(TOOL_IDS.len(), TOOLS.len());
+        for ((id, name, folder), listed) in TOOLS.iter().zip(TOOL_IDS) {
+            assert_eq!(*id, listed);
+            let profile = target_profile(id).unwrap();
+            assert_eq!(profile.name, *name);
+            assert!(profile.root.ends_with(std::path::Path::new(folder).join("skills")));
+        }
+        assert!(target_profile("vs-code").is_err());
     }
 }
