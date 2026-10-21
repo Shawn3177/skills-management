@@ -587,6 +587,114 @@ describe("App", () => {
     expect(openUrlMock).toHaveBeenCalledWith("https://github.com/owner/skills/tree/main/code-review");
   });
 
+  const todoFinding = {
+    ruleId: "cc-tools",
+    level: "degraded",
+    token: "TodoWrite",
+    file: "SKILL.md",
+    line: 7,
+    excerpt: "Track steps with TodoWrite.",
+  };
+  const codexWarning = { targetId: "codex", level: "degraded", count: 2, first: todoFinding, acknowledged: false };
+
+  it("asks before enabling a skill in a tool it may not suit, and enables only when confirmed", async () => {
+    mockBackend(
+      { set_skill_target_enabled: () => ({ enabled: true, changed: true }) },
+      [review, { ...safety, compat: [codexWarning] }, broken],
+    );
+    await renderApp();
+
+    const button = within(card("agent-tool-safety")).getByRole("button", { name: "Enable agent-tool-safety in Codex" });
+    expect(button).toHaveAttribute("title", "Codex · uses the Claude Code tool TodoWrite (SKILL.md line 7)");
+    fireEvent.click(button);
+
+    expect(
+      await screen.findByText(
+        "Parts of agent-tool-safety may not work in Codex: it uses the Claude Code tool TodoWrite (SKILL.md line 7), plus 1 more.",
+      ),
+    ).toBeInTheDocument();
+    expect(calls("set_skill_target_enabled")).toHaveLength(0);
+
+    fireEvent.click(screen.getByRole("button", { name: "Enable anyway" }));
+    await waitFor(() =>
+      expect(calls("set_skill_target_enabled")).toEqual([
+        { sourcePath: safety.sourcePath, targetId: "codex", enabled: true },
+      ]),
+    );
+  });
+
+  it("does not ask again in a tool the user marked as working", async () => {
+    mockBackend(
+      { set_skill_target_enabled: () => ({ enabled: true, changed: true }) },
+      [review, { ...safety, compat: [{ ...codexWarning, acknowledged: true }] }, broken],
+    );
+    await renderApp();
+
+    fireEvent.click(within(card("agent-tool-safety")).getByRole("button", { name: "Enable agent-tool-safety in Codex" }));
+
+    await waitFor(() => expect(calls("set_skill_target_enabled")).toHaveLength(1));
+    expect(screen.queryByRole("button", { name: "Enable anyway" })).not.toBeInTheDocument();
+  });
+
+  it("lists what the check found on the details page and marks a tool as working", async () => {
+    const risky = { ...safety, compat: [codexWarning] };
+    let scans = 0;
+    mockBackend({
+      scan_skills: () => {
+        scans += 1;
+        return scans === 1 ? [review, risky, broken] : [review, { ...risky, compat: [{ ...codexWarning, acknowledged: true }] }, broken];
+      },
+      read_skill_markdown: () => "---\nname: agent-tool-safety\ndescription: x\n---\nBody\n",
+      check_skill_compat: () => ({
+        targetId: "codex",
+        targetName: "Codex",
+        level: "degraded",
+        declared: null,
+        findings: [todoFinding, { ...todoFinding, ruleId: "cc-args", token: "$ARGUMENTS", line: 9, excerpt: "Pass $ARGUMENTS on." }],
+        acknowledged: false,
+      }),
+      acknowledge_skill_compat: () => ({ acknowledged: true }),
+    });
+    await renderApp();
+
+    fireEvent.click(screen.getByRole("button", { name: "agent-tool-safety" }));
+    const panel = await screen.findByRole("region", { name: "Tool fit" });
+    expect(within(panel).getByText("Partly limited")).toBeInTheDocument();
+    expect(within(panel).getByText("uses the Claude Code tool TodoWrite")).toBeInTheDocument();
+
+    fireEvent.click(within(panel).getByRole("button", { name: "Show all 2" }));
+    expect(await within(panel).findByText("uses Claude Code's $ARGUMENTS placeholder")).toBeInTheDocument();
+    expect(calls("check_skill_compat")).toEqual([{ sourcePath: safety.sourcePath, targetId: "codex" }]);
+
+    fireEvent.click(within(panel).getByRole("button", { name: "Mark as working" }));
+    await waitFor(() => expect(calls("acknowledge_skill_compat")).toEqual([{ sourcePath: safety.sourcePath, targetId: "codex" }]));
+    expect(await within(panel).findByText("Confirmed working")).toBeInTheDocument();
+  });
+
+  it("asks before saving an edit that enables a tool the skill may not suit", async () => {
+    mockBackend(
+      { set_skill_target_enabled: () => ({ enabled: true, changed: true }) },
+      [review, { ...safety, compat: [codexWarning] }, broken],
+    );
+    await renderApp();
+
+    fireEvent.click(screen.getByRole("button", { name: "Edit agent-tool-safety" }));
+    fireEvent.click(screen.getByRole("button", { name: "Codex" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    expect(
+      await screen.findByText("agent-tool-safety may not suit Codex; the details page shows why. Save anyway?"),
+    ).toBeInTheDocument();
+    expect(calls("set_skill_target_enabled")).toHaveLength(0);
+
+    fireEvent.click(screen.getByRole("button", { name: "Save anyway" }));
+    await waitFor(() =>
+      expect(calls("set_skill_target_enabled")).toEqual([
+        { sourcePath: safety.sourcePath, targetId: "codex", enabled: true },
+      ]),
+    );
+  });
+
   it("opens skill details and removes a skill only after confirming", async () => {
     mockBackend({ remove_skill_from_library: () => ({ skillName: "agent-tool-safety", removedFrom: ["Claude Code"] }) });
     await renderApp();
@@ -857,6 +965,41 @@ describe("App", () => {
       ]),
     );
     await waitFor(() => expect(screen.getByText("Added 1 skills.")).toBeInTheDocument());
+  });
+
+  it("holds back enabling a new skill in a tool it may not suit until asked", async () => {
+    mockBackend({
+      import_from_github: () => ({ skillName: "remote", libraryPath: `${LIB}/remote` }),
+      check_skill_compat: (args) => ({
+        targetId: args?.targetId,
+        level: args?.targetId === "codex" ? "incompatible" : "compatible",
+        declared: null,
+        findings: [],
+        acknowledged: false,
+      }),
+      set_skill_target_enabled: () => ({ enabled: true }),
+    });
+    await renderApp();
+
+    fireEvent.click(screen.getByRole("button", { name: "Add skill" }));
+    fireEvent.click(screen.getByRole("button", { name: "GitHub" }));
+    fireEvent.change(screen.getByRole("textbox", { name: /GitHub URL/ }), {
+      target: { value: "https://github.com/owner/repo/tree/main/remote" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Codex" }));
+    fireEvent.click(screen.getByRole("button", { name: "Add" }));
+
+    expect(
+      await screen.findByText("Added 1 skills. 1 may not suit their tool and were not enabled: remote → Codex."),
+    ).toBeInTheDocument();
+    expect(calls("set_skill_target_enabled")).toEqual([
+      { sourcePath: `${LIB}/remote`, targetId: "claude-code", enabled: true },
+    ]);
+
+    fireEvent.click(screen.getByRole("button", { name: "Enable them anyway" }));
+    await waitFor(() => expect(screen.getByText("Enabled 1.")).toBeInTheDocument());
+    expect(calls("set_skill_target_enabled")).toHaveLength(2);
+    expect(calls("set_skill_target_enabled")[1]).toEqual({ sourcePath: `${LIB}/remote`, targetId: "codex", enabled: true });
   });
 
   it("adds skills found in a local folder, skipping ones already in the library", async () => {

@@ -44,6 +44,22 @@ export const demoSkills: SkillRecord[] = [
     health: "warning",
     targets: targets(true, false),
     supportFiles: ["SKILL.md", "scripts/validate-tools.ps1"],
+    compat: [
+      {
+        targetId: "codex",
+        level: "degraded",
+        count: 3,
+        first: {
+          ruleId: "cc-tools",
+          level: "degraded",
+          token: "TodoWrite",
+          file: "SKILL.md",
+          line: 18,
+          excerpt: "Track each tool you design with TodoWrite.",
+        },
+        acknowledged: false,
+      },
+    ],
   },
   {
     id: "demo-design",
@@ -56,6 +72,22 @@ export const demoSkills: SkillRecord[] = [
     health: "healthy",
     targets: targets(false, true),
     supportFiles: ["SKILL.md"],
+    compat: [
+      {
+        targetId: "claude-code",
+        level: "incompatible",
+        count: 1,
+        first: {
+          ruleId: "wrapper",
+          level: "incompatible",
+          token: ".agents/skills/frontend-design-review/SKILL.md",
+          file: "SKILL.md",
+          line: 6,
+          excerpt: "Read `.agents/skills/frontend-design-review/SKILL.md` for full instructions.",
+        },
+        acknowledged: false,
+      },
+    ],
   },
   {
     id: "demo-stale",

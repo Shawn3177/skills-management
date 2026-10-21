@@ -1648,6 +1648,7 @@ a:hover {
 
 /* Library toggles: a logo in a round button; colour = on, grey = off. */
 .tool-pill.icon {
+  position: relative;
   justify-content: center;
   width: 32px;
   min-height: 32px;
@@ -1685,6 +1686,80 @@ a:hover {
   height: 7px;
   border-radius: 50%;
   background: #f59e0b;
+}
+
+/* The skill may not suit this tool (static check). Bottom corner, so a
+   conflict dot (top corner) can show at the same time. */
+.compat-dot {
+  position: absolute;
+  right: 3px;
+  bottom: 3px;
+  width: 7px;
+  height: 7px;
+  border: 1.5px solid var(--warning);
+  border-radius: 50%;
+  background: var(--surface);
+}
+
+.compat-dot.incompatible {
+  border-color: var(--danger-fill);
+  background: var(--danger-fill);
+}
+
+/* Detail page: tools a library skill may not suit. */
+.compat-list,
+.compat-findings {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.compat-row {
+  display: grid;
+  gap: 8px;
+  padding: 12px 0;
+  border-top: 1px solid var(--line);
+}
+
+.compat-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.compat-head .tool-pill {
+  cursor: default;
+}
+
+.compat-actions {
+  display: inline-flex;
+  gap: 6px;
+  margin-left: auto;
+}
+
+.compat-findings {
+  display: grid;
+  gap: 6px;
+}
+
+.compat-findings li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 10px;
+  color: var(--text-2);
+}
+
+.compat-excerpt {
+  flex-basis: 100%;
+  overflow-wrap: anywhere;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: var(--soft);
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 12px;
 }
 
 /* Where a tool-folder skill lives. */

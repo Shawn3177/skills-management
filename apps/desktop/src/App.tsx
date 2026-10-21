@@ -15,6 +15,7 @@ import { NoticeBar, PageHeader, type Notice } from "./components/ui";
 import { WindowControls } from "./components/WindowControls";
 import { demoSkills } from "./data/demoSkills";
 import { useLocale } from "./i18n/useLocale";
+import { compatAsk, compatWarning } from "./lib/compat";
 import {
   api,
   errorText,
@@ -196,7 +197,32 @@ function App() {
     await loadSkills();
   }
 
+  /**
+   * Enabling a skill in a tool it may not suit asks first (never blocks);
+   * a tool the user marked as working for this skill does not.
+   */
   async function toggleTarget(skill: SkillRecord, toolId: ToolId, enable: boolean) {
+    const warning = enable ? compatWarning(skill, toolId) : null;
+    if (warning) {
+      setNotice({
+        kind: "warning",
+        text: compatAsk(t, skill, toolName(toolId), warning),
+        actions: [
+          { label: t("compat.enableAnyway"), run: () => void applyToggle(skill, toolId, true) },
+          { label: t("compat.viewDetails"), run: () => showDetail(skill) },
+        ],
+      });
+      return;
+    }
+    await applyToggle(skill, toolId, enable);
+  }
+
+  function showDetail(skill: SkillRecord) {
+    setNotice(null);
+    go({ name: "detail", path: skill.sourcePath });
+  }
+
+  async function applyToggle(skill: SkillRecord, toolId: ToolId, enable: boolean) {
     setBusyKey(`${skill.sourcePath}:${toolId}`);
     setNotice(null);
     try {
@@ -440,9 +466,17 @@ function App() {
       lastError = error;
     }
 
+    // New skills are checked before they are enabled; ones that may not suit
+    // a tool are held back and offered in one question at the end.
+    const held: Array<{ path: string; toolId: ToolId; name: string }> = [];
     for (const path of libraryPaths) {
       for (const toolId of request.enableIn) {
         try {
+          const report = await api.checkCompat(path, toolId).catch(() => null);
+          if (report && report.level !== "compatible" && !report.acknowledged) {
+            held.push({ path, toolId, name: folderName(path) });
+            continue;
+          }
           await api.setTarget(path, toolId, true);
         } catch (error) {
           console.error("enable after add failed", error);
@@ -458,17 +492,65 @@ function App() {
       return;
     }
     go({ name: "main" });
-    setNotice({
-      kind: failed > 0 ? "error" : "success",
-      text:
-        failed > 0
-          ? t("add.partial", { count: libraryPaths.length, failed })
-          : t("add.done", { count: libraryPaths.length }),
-    });
+    if (held.length > 0) {
+      setNotice({
+        kind: "warning",
+        text: t("compat.skippedOnAdd", {
+          added: libraryPaths.length,
+          count: held.length,
+          list: held.map((item) => `${item.name} → ${toolName(item.toolId)}`).join(t("compat.separator")),
+        }),
+        actions: [{ label: t("compat.enableSkipped"), run: () => void enableHeld(held) }],
+      });
+    } else {
+      setNotice({
+        kind: failed > 0 ? "error" : "success",
+        text:
+          failed > 0
+            ? t("add.partial", { count: libraryPaths.length, failed })
+            : t("add.done", { count: libraryPaths.length }),
+      });
+    }
     await loadSkills();
   }
 
-  async function saveEdit(skill: SkillRecord, changes: EditChanges) {
+  async function enableHeld(held: Array<{ path: string; toolId: ToolId }>) {
+    setNotice(null);
+    let enabled = 0;
+    let lastError: unknown = null;
+    for (const item of held) {
+      try {
+        await api.setTarget(item.path, item.toolId, true);
+        enabled += 1;
+      } catch (error) {
+        console.error("enable held skill failed", error);
+        lastError = error;
+      }
+    }
+    setNotice(
+      lastError === null
+        ? { kind: "success", text: t("compat.enabledSkipped", { count: enabled }) }
+        : { kind: "error", text: describeError(lastError) },
+    );
+    await loadSkills();
+  }
+
+  async function saveEdit(skill: SkillRecord, changes: EditChanges, confirmed = false) {
+    const risky = confirmed ? [] : changes.toggles.filter((toggle) => toggle.enable && compatWarning(skill, toggle.toolId));
+    if (risky.length > 0) {
+      setNotice({
+        kind: "warning",
+        text: t("compat.askSave", {
+          skill: skill.name,
+          tools: risky.map((toggle) => toolName(toggle.toolId)).join(t("compat.separator")),
+        }),
+        actions: [
+          { label: t("compat.saveAnyway"), run: () => void saveEdit(skill, changes, true) },
+          { label: t("compat.viewDetails"), run: () => showDetail(skill) },
+        ],
+      });
+      return;
+    }
     setSaving(true);
     setNotice(null);
     try {
@@ -719,6 +801,7 @@ function App() {
               onOpenFolder={(path) => void openFolder(path)}
               onEdit={(skill) => go({ name: "edit", path: skill.sourcePath })}
               onAddToLibrary={(skill) => void addLocalToLibrary(skill)}
+              onCompatChanged={() => void loadSkills()}
             />
           ) : (
             <div className="page-body">

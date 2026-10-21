@@ -3,6 +3,7 @@ use std::sync::Mutex;
 
 mod account;
 mod catalog;
+mod compat;
 mod fs_ops;
 mod github;
 mod library;
@@ -206,6 +207,16 @@ async fn update_skill_from_github(library_path: String) -> Result<UpdateResult, 
 }
 
 #[tauri::command]
+async fn check_skill_compat(source_path: String, target_id: String) -> Result<compat::CompatReport, String> {
+    run_blocking(move || compat::check_skill_compat(source_path, target_id)).await
+}
+
+#[tauri::command]
+async fn acknowledge_skill_compat(source_path: String, target_id: String) -> Result<compat::CompatReport, String> {
+    run_write(move || compat::acknowledge_skill_compat(source_path, target_id)).await
+}
+
+#[tauri::command]
 async fn set_skill_target_enabled(
     source_path: String,
     target_id: String,
@@ -273,6 +284,8 @@ pub fn run() {
             unlink_github_series,
             check_skill_updates,
             update_skill_from_github,
+            check_skill_compat,
+            acknowledge_skill_compat,
             set_skill_target_enabled,
             set_skill_targets_bulk,
             export_skillpack,

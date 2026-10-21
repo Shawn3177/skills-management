@@ -29,6 +29,7 @@ import {
   type ToolId,
 } from "../lib/skills";
 import { GithubButton, SkillTile, ToolLogo } from "./ui";
+import { compatFor, compatPlace, compatReason } from "../lib/compat";
 
 export type Tab = "all" | ToolId;
 export type ScanState = "scanning" | "ready" | "preview" | "error";
@@ -611,7 +612,15 @@ function SkillCard({
   const currentTool = allTools.find((tool) => tool.id === tab);
   const enabledHere = currentTool ? isEnabledIn(skill, currentTool.id) : false;
   const conflictHere = currentTool ? hasConflictIn(skill, currentTool.id) : false;
+  const compatHere = currentTool ? compatFor(skill, currentTool.id) : null;
   const busy = busyKey !== null;
+  /** A tooltip line for a tool the skill may not suit, e.g. "uses … (SKILL.md line 7)". */
+  const compatTitle = (toolId: ToolId) => {
+    const entry = compatFor(skill, toolId);
+    return entry && !entry.acknowledged
+      ? t("compat.reasonAt", { reason: compatReason(t, entry.first), where: compatPlace(t, entry.first) })
+      : null;
+  };
 
   return (
     <article
@@ -626,6 +635,13 @@ function SkillCard({
           </button>
           {enabledHere ? <span className="tag success">{t("card.enabled")}</span> : null}
           {update?.hasUpdate ? <span className="tag info">{t("card.updateAvailable")}</span> : null}
+          {currentTool && compatHere && !compatHere.acknowledged ? (
+            <span className="tag warning" title={compatTitle(currentTool.id) ?? undefined}>
+              {t(compatHere.level === "incompatible" ? "card.compatIncompatible" : "card.compatDegraded", {
+                tool: currentTool.name,
+              })}
+            </span>
+          ) : null}
           {issues.includes("missing-name") ? <span className="tag warning">{t("card.missingName")}</span> : null}
           {issues.includes("missing-description") ? (
             <span className="tag warning">{t("card.missingDescription")}</span>
@@ -716,12 +732,14 @@ function SkillCard({
                 </button>
               );
             }
+            const fit = compatTitle(tool.id);
+            const fitLevel = compatFor(skill, tool.id)?.level;
             return (
               <button
                 type="button"
                 key={tool.id}
                 className={`tool-pill icon ${on && !broken ? "on" : ""}`}
-                title={tool.name}
+                title={fit ? `${tool.name} · ${fit}` : tool.name}
                 aria-pressed={on}
                 aria-label={
                   broken
@@ -735,6 +753,7 @@ function SkillCard({
                 onClick={() => onToggle(skill, tool.id, !on)}
               >
                 <ToolLogo id={tool.id} dim={!on || broken} />
+                {fit && !broken ? <span className={`compat-dot ${fitLevel}`} aria-hidden="true" /> : null}
               </button>
             );
           })}

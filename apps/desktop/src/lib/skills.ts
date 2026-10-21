@@ -31,6 +31,30 @@ export interface SkillRecord {
   linkedSource?: boolean;
   /** Specific SKILL.md problems: "unreadable", "missing-name", "missing-description". */
   issues?: string[];
+  /** Library skills: the tools it may not suit (tools it suits are left out). */
+  compat?: CompatSummary[];
+}
+
+export type CompatLevel = "compatible" | "degraded" | "incompatible";
+
+export interface CompatFinding {
+  ruleId: string;
+  level: CompatLevel;
+  /** What matched, e.g. `TodoWrite` or `allowed-tools`. */
+  token: string;
+  /** Relative to the skill folder. */
+  file: string;
+  line: number | null;
+  excerpt: string;
+}
+
+export interface CompatSummary {
+  targetId: string;
+  level: CompatLevel;
+  count: number;
+  first: CompatFinding;
+  /** The user confirmed it works there (holds until SKILL.md changes). */
+  acknowledged: boolean;
 }
 
 export type ToolId =

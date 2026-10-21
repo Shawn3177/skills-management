@@ -3,8 +3,9 @@ import { useEffect, useState } from "react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { TFunction } from "../i18n/useLocale";
-import { api, errorText, isBridgeUnavailable } from "../lib/api";
-import { githubSource, isEnabledIn, isLibrarySkill, tildePath, tools, type SkillRecord } from "../lib/skills";
+import { api, errorText, isBridgeUnavailable, type CompatReport } from "../lib/api";
+import { compatFor, compatPlace, compatReason } from "../lib/compat";
+import { githubSource, isEnabledIn, isLibrarySkill, tildePath, tools, type SkillRecord, type ToolId } from "../lib/skills";
 import { GithubButton, SkillTile, ToolLogo } from "./ui";
 
 type Props = {
@@ -18,6 +19,8 @@ type Props = {
   onEdit: (skill: SkillRecord) => void;
   /** Tool-folder skills: add to the shared library. */
   onAddToLibrary: (skill: SkillRecord) => void;
+  /** A tool was marked as working for this skill: rescan. */
+  onCompatChanged: () => void;
 };
 
 /** Everything after the frontmatter block of a SKILL.md. */
@@ -28,7 +31,7 @@ export function skillBody(markdown: string): string {
 }
 
 /** What a skill is and does: its description, where it lives, and its SKILL.md. */
-export function DetailView({ t, skill, home, busy, onOpenUrl, onOpenFolder, onEdit, onAddToLibrary }: Props) {
+export function DetailView({ t, skill, home, busy, onOpenUrl, onOpenFolder, onEdit, onAddToLibrary, onCompatChanged }: Props) {
   const [body, setBody] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const inLibrary = isLibrarySkill(skill);
@@ -110,6 +113,8 @@ export function DetailView({ t, skill, home, busy, onOpenUrl, onOpenFolder, onEd
         </dl>
       </section>
 
+      {inLibrary ? <CompatPanel t={t} skill={skill} onChanged={onCompatChanged} /> : null}
+
       <section className="panel" aria-label="SKILL.md">
         <h2>SKILL.md</h2>
         {error ? <p className="field-hint">{error}</p> : null}
@@ -142,5 +147,107 @@ export function DetailView({ t, skill, home, busy, onOpenUrl, onOpenFolder, onEd
         ) : null}
       </section>
     </div>
+  );
+}
+
+/**
+ * The shown tools this library skill may not suit, with what the static check
+ * found, and a way to mark a tool as working so enabling there stops warning.
+ */
+function CompatPanel({ t, skill, onChanged }: { t: TFunction; skill: SkillRecord; onChanged: () => void }) {
+  const [reports, setReports] = useState<Partial<Record<ToolId, CompatReport>>>({});
+  const [working, setWorking] = useState<ToolId | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const entries = tools.flatMap((tool) => {
+    const entry = compatFor(skill, tool.id);
+    return entry ? [{ tool, entry }] : [];
+  });
+  if (entries.length === 0) {
+    return null;
+  }
+
+  async function run(toolId: ToolId, action: () => Promise<void>) {
+    setWorking(toolId);
+    setError(null);
+    try {
+      await action();
+    } catch (reason) {
+      setError(isBridgeUnavailable(reason) ? t("errors.bridge") : errorText(reason));
+    } finally {
+      setWorking(null);
+    }
+  }
+
+  const showAll = (toolId: ToolId) =>
+    run(toolId, async () => {
+      const report = await api.checkCompat(skill.sourcePath, toolId);
+      setReports((current) => ({ ...current, [toolId]: report }));
+    });
+
+  const acknowledge = (toolId: ToolId) =>
+    run(toolId, async () => {
+      await api.acknowledgeCompat(skill.sourcePath, toolId);
+      onChanged();
+    });
+
+  return (
+    <section className="panel" aria-label={t("detail.compat")}>
+      <h2>{t("detail.compat")}</h2>
+      <p className="field-hint">{t("detail.compatHint")}</p>
+      <ul className="compat-list">
+        {entries.map(({ tool, entry }) => {
+          const report = reports[tool.id];
+          const findings = report ? report.findings : [entry.first];
+          return (
+            <li className="compat-row" key={tool.id}>
+              <div className="compat-head">
+                <span className="tool-pill on">
+                  <ToolLogo id={tool.id} />
+                  {tool.name}
+                </span>
+                <span className={`tag ${entry.acknowledged ? "neutral" : "warning"}`}>
+                  {entry.acknowledged
+                    ? t("detail.compatAcknowledged")
+                    : t(entry.level === "incompatible" ? "detail.compatIncompatible" : "detail.compatDegraded")}
+                </span>
+                <span className="compat-actions">
+                  {!report && entry.count > 1 ? (
+                    <button
+                      type="button"
+                      className="button small quiet"
+                      disabled={working !== null}
+                      onClick={() => void showAll(tool.id)}
+                    >
+                      {t("detail.compatShowAll", { count: entry.count })}
+                    </button>
+                  ) : null}
+                  {!entry.acknowledged ? (
+                    <button
+                      type="button"
+                      className="button small"
+                      disabled={working !== null}
+                      onClick={() => void acknowledge(tool.id)}
+                    >
+                      {t("detail.compatAcknowledge")}
+                    </button>
+                  ) : null}
+                </span>
+              </div>
+              {report?.declared ? <p className="muted small">{t("detail.compatDeclared", { text: report.declared })}</p> : null}
+              <ul className="compat-findings">
+                {findings.map((finding) => (
+                  <li key={`${finding.ruleId}:${finding.token}`}>
+                    <span>{compatReason(t, finding)}</span>
+                    <span className="muted small mono">{compatPlace(t, finding)}</span>
+                    {finding.excerpt ? <code className="compat-excerpt">{finding.excerpt}</code> : null}
+                  </li>
+                ))}
+              </ul>
+            </li>
+          );
+        })}
+      </ul>
+      {error ? <p className="field-hint">{error}</p> : null}
+    </section>
   );
 }
