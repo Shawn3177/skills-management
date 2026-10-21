@@ -439,25 +439,26 @@ pub fn detect_skill_variants(library_path: String) -> Result<DetectVariantsResul
     let agent = build_agent()?;
     let zip_bytes =
         download_zipball(&agent, &source.owner, &source.repo, commit).map_err(|error| error.message())?;
-    apply_detected_variants(&library_path, &source, &zip_bytes, &data_root, &target_profiles)
+    let mut snapshot = open_snapshot(&agent, &source.owner, &source.repo, commit, &zip_bytes, &source.subdir)?;
+    apply_detected_variants(&library_path, &source, snapshot.as_mut(), &data_root, &target_profiles)
 }
 
-/// Keep the tool versions found in `zip_bytes` beside the library skill,
+/// Keep the tool versions found in `snapshot` beside the library skill,
 /// record them in its source file, and re-copy the skill into each tool that
 /// has it enabled and now gets a different version.
 fn apply_detected_variants(
     library_path: &Path,
     source: &GithubSource,
-    zip_bytes: &[u8],
+    snapshot: &mut dyn RepoSnapshot,
     data_root: &Path,
     target_profiles: &[(String, String, PathBuf)],
 ) -> Result<DetectVariantsResult, String> {
     let skill_name = dir_skill_name(library_path);
-    let found = variants::detect_in_zip(zip_bytes, &source.subdir)?;
+    let found = variants::detect(snapshot, &source.subdir)?;
     let mut affected: Vec<String> = variants::list(library_path).into_iter().map(|info| info.target_id).collect();
     affected.extend(found.iter().map(|(tool, _)| tool.clone()));
 
-    let staged = variants::stage(zip_bytes, &found, data_root)?;
+    let staged = variants::stage(snapshot, &found, data_root)?;
     if let Err(error) = variants::put_in_place(data_root, &skill_name, staged.as_deref()) {
         if let Some(staged) = &staged {
             let _ = fs::remove_dir_all(staged);
@@ -2099,7 +2100,9 @@ mod tests {
             ("skills/dev/SKILL.md", main),
             (".codex/skills/dev/SKILL.md", "---\nname: dev\ndescription: Codex\n---\nCodex version\n"),
         ]);
-        let result = apply_detected_variants(&library, &source, &zip, &data_root, &profiles).unwrap();
+        let result =
+            apply_detected_variants(&library, &source, &mut ZipSnapshot::new(&zip).unwrap(), &data_root, &profiles)
+                .unwrap();
         assert_eq!(result.variants.len(), 1);
         assert_eq!(result.variants[0].target_id, "codex");
         assert_eq!(result.variants[0].path, ".codex/skills/dev");
@@ -2114,7 +2117,9 @@ mod tests {
 
         // Nothing else in the repository: says so and changes nothing.
         let plain = repo_zip(&[("skills/dev/SKILL.md", main)]);
-        let detected_again = apply_detected_variants(&library, &recorded, &plain, &data_root, &profiles[1..]).unwrap();
+        let detected_again =
+            apply_detected_variants(&library, &recorded, &mut ZipSnapshot::new(&plain).unwrap(), &data_root, &profiles[1..])
+                .unwrap();
         assert!(detected_again.variants.is_empty());
         assert!(detected_again.refreshed_targets.is_empty());
         assert!(detected_again.message.contains("no other tool versions"), "{}", detected_again.message);
