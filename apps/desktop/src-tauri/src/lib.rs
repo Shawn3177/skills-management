@@ -11,6 +11,7 @@ mod metadata;
 mod pack;
 mod scanner;
 mod series;
+mod snapshot;
 mod targets;
 mod trash;
 mod variants;

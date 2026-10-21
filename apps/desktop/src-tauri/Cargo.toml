@@ -23,6 +23,8 @@ tauri-plugin-opener = "2"
 tauri-plugin-dialog = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# Decodes files read through the git blobs API (paths GitHub archives leave out).
+base64 = "0.22"
 # Only Deflate is used; the default features pull in C codecs (bzip2, lzma, zstd).
 zip = { version = "2", default-features = false, features = ["deflate"] }
 sha2 = "0.10"
