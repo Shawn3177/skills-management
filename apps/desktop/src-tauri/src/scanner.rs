@@ -37,6 +37,8 @@ pub struct ScannedSkill {
     pub issues: Vec<String>,
     /// Library skills: the tools it may not suit, so enabling there can warn.
     pub compat: Vec<crate::compat::CompatSummary>,
+    /// Library skills: tools that get their own version of it (see `variants`).
+    pub variants: Vec<crate::variants::VariantInfo>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -181,6 +183,7 @@ fn scan_skill_dir(
             linked_source: false,
             issues: vec!["unreadable".to_string()],
             compat: Vec::new(),
+            variants: Vec::new(),
         });
     };
     let metadata = parse_skill_metadata(&contents);
@@ -209,10 +212,10 @@ fn scan_skill_dir(
         (linked, is_linked)
     };
 
-    let compat = if source_label(root) == "Shared Library" {
-        crate::compat::library_skill_summaries(skill_dir)
+    let (compat, variants) = if source_label(root) == "Shared Library" {
+        (crate::compat::library_skill_summaries(skill_dir), crate::variants::list(skill_dir))
     } else {
-        Vec::new()
+        (Vec::new(), Vec::new())
     };
 
     Some(ScannedSkill {
@@ -234,6 +237,7 @@ fn scan_skill_dir(
         linked_source,
         issues,
         compat,
+        variants,
     })
 }
 
@@ -494,7 +498,9 @@ fn target_state(
     if !copy.is_dir() || !copy.join("SKILL.md").is_file() {
         return (false, false);
     }
-    if is_managed_target_copy(&copy, skill_dir, target_id) || same_skill_content(skill_dir, &copy) {
+    // A tool with its own version of the skill holds that version, not the library's.
+    let expected = crate::variants::effective_source(skill_dir, target_id);
+    if is_managed_target_copy(&copy, skill_dir, target_id) || same_skill_content(&expected, &copy) {
         return (true, false);
     }
     (false, true)
@@ -539,6 +545,30 @@ mod tests {
     use super::*;
     use crate::fs_ops::test_temp_dir as unique_temp_dir;
     use std::fs;
+
+    #[test]
+    fn a_copy_of_the_tools_own_version_counts_as_enabled() {
+        let temp_root = unique_temp_dir("scan-variant");
+        let data_root = temp_root.join(".skills-manage");
+        let library_root = data_root.join("library");
+        let codex_root = temp_root.join("codex-skills");
+        fs::create_dir_all(library_root.join("dev")).unwrap();
+        fs::write(library_root.join("dev").join("SKILL.md"), "---\nname: dev\ndescription: Main\n---\nMain\n").unwrap();
+        let version = "---\nname: dev\ndescription: Codex\n---\nCodex\n";
+        let codex_version = data_root.join("variants").join("dev").join("codex");
+        fs::create_dir_all(&codex_version).unwrap();
+        fs::write(codex_version.join("SKILL.md"), version).unwrap();
+        fs::create_dir_all(codex_root.join("dev")).unwrap();
+        fs::write(codex_root.join("dev").join("SKILL.md"), version).unwrap();
+
+        let skills = scan_skill_roots_with_target_roots(&[library_root.clone()], &[("codex", codex_root.clone())]);
+        let codex = skills[0].targets.iter().find(|target| target.id == "codex").unwrap();
+        assert!(codex.enabled && !codex.conflict);
+        assert_eq!(skills[0].variants.len(), 1);
+        assert_eq!(skills[0].variants[0].target_id, "codex");
+
+        fs::remove_dir_all(temp_root).unwrap();
+    }
 
     #[test]
     fn library_skills_report_tools_they_may_not_suit() {

@@ -21,7 +21,9 @@ use crate::library::import_skill_to_library_with_root;
 use crate::series;
 use crate::targets;
 use crate::trash::unique_trash_path;
+use crate::variants;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::fs;
 use std::io::{Cursor, Read};
 use std::path::{Path, PathBuf};
@@ -198,6 +200,10 @@ pub struct GithubSource {
     pub synced_commit: String,
     pub synced_at: u128,
     pub url: String,
+    /// Tools with their own version of the skill in the repository: tool id ->
+    /// folder (see `variants`). Older source files have none.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub variants: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -291,6 +297,7 @@ fn install_from_zip(
         synced_commit: synced_commit.to_string(),
         synced_at: unix_ms(),
         url: url.clone(),
+        variants: install_variants(zip_bytes, subdir, &library_path, data_root),
     };
     write_source_file(&library_path, &source)?;
 
@@ -305,6 +312,29 @@ fn install_from_zip(
         url,
         message: "Skill imported from GitHub into the shared library.".to_string(),
     })
+}
+
+/// Other tools' versions of a newly imported skill, kept beside it. Best
+/// effort: the import itself never fails over them.
+fn install_variants(zip_bytes: &[u8], subdir: &str, library_path: &Path, data_root: &Path) -> BTreeMap<String, String> {
+    let Ok(found) = variants::detect_in_zip(zip_bytes, subdir) else {
+        return BTreeMap::new();
+    };
+    let folder = dir_skill_name(library_path);
+    let placed = variants::stage(zip_bytes, &found, data_root)
+        .and_then(|staged| variants::put_in_place(data_root, &folder, staged.as_deref()));
+    if placed.is_err() {
+        return BTreeMap::new();
+    }
+    found.into_iter().collect()
+}
+
+/// The tools' versions in a freshly downloaded archive, staged for an update.
+/// `None` (keep the current ones) when they could not be read.
+fn stage_variant_update(zip_bytes: &[u8], subdir: &str, data_root: &Path) -> Option<variants::VariantUpdate> {
+    let found = variants::detect_in_zip(zip_bytes, subdir).ok()?;
+    let staged = variants::stage(zip_bytes, &found, data_root).ok()?;
+    Some(variants::VariantUpdate { found: found.into_iter().collect(), staged })
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -587,6 +617,7 @@ fn update_skill_from_github_inner(
         return Err(error);
     }
 
+    let variant_update = stage_variant_update(&zip_bytes, &source.subdir, data_root);
     let outcome = apply_skill_update(
         library_path,
         &staging_skill,
@@ -594,6 +625,7 @@ fn update_skill_from_github_inner(
         &new_commit,
         data_root,
         target_profiles,
+        variant_update,
     );
     let _ = fs::remove_dir_all(&staging_parent);
     outcome
@@ -602,6 +634,9 @@ fn update_skill_from_github_inner(
 /// Replace the library skill in place with already-validated new content, then
 /// refresh any tool copies that were enabled. No network here, so it is unit
 /// tested directly. The previous library dir is soft-deleted to trash.
+///
+/// `variant_update` replaces the tools' own versions too (before the copies
+/// are refreshed, so each tool gets its new version); `None` keeps them.
 fn apply_skill_update(
     library_path: &Path,
     new_skill_dir: &Path,
@@ -609,25 +644,68 @@ fn apply_skill_update(
     new_commit: &str,
     data_root: &Path,
     target_profiles: &[(String, String, PathBuf)],
+    variant_update: Option<variants::VariantUpdate>,
 ) -> Result<UpdateResult, String> {
     let skill_name = dir_skill_name(library_path);
     let previous_commit = source.synced_commit.clone();
+    let discard_staged = |update: &Option<variants::VariantUpdate>| {
+        if let Some(staged) = update.as_ref().and_then(|update| update.staged.as_ref()) {
+            let _ = fs::remove_dir_all(staged);
+        }
+    };
 
     // Write the refreshed source file into staging so the swap is atomic.
     let updated_source = GithubSource {
         synced_commit: new_commit.to_string(),
         synced_at: unix_ms(),
+        variants: variant_update
+            .as_ref()
+            .map_or_else(|| source.variants.clone(), |update| update.found.clone()),
         ..source.clone()
     };
-    write_source_file(new_skill_dir, &updated_source)?;
+    if let Err(error) = write_source_file(new_skill_dir, &updated_source) {
+        discard_staged(&variant_update);
+        return Err(error);
+    }
 
     // Soft-delete the current copy, then move the new content into place.
-    let trash_path = unique_trash_path(data_root, &format!("library-{skill_name}"))?;
-    fs::rename(library_path, &trash_path)
-        .map_err(|error| format!("Could not move the current skill to trash: {error}"))?;
+    let trash_path = match unique_trash_path(data_root, &format!("library-{skill_name}")) {
+        Ok(path) => path,
+        Err(error) => {
+            discard_staged(&variant_update);
+            return Err(error);
+        }
+    };
+    if let Err(error) = fs::rename(library_path, &trash_path) {
+        discard_staged(&variant_update);
+        return Err(format!("Could not move the current skill to trash: {error}"));
+    }
     if let Err(error) = fs::rename(new_skill_dir, library_path) {
         let _ = fs::rename(&trash_path, library_path);
+        discard_staged(&variant_update);
         return Err(format!("Could not install the updated skill: {error}"));
+    }
+
+    // Tools whose own version the repository no longer has fall back to the
+    // library skill.
+    let mut variants_note = String::new();
+    if let Some(update) = &variant_update {
+        let dropped: Vec<&str> = source
+            .variants
+            .keys()
+            .filter(|tool| !update.found.contains_key(*tool))
+            .map(|tool| targets::target_name_for(tool).unwrap_or(tool))
+            .collect();
+        match variants::put_in_place(data_root, &skill_name, update.staged.as_deref()) {
+            Ok(()) if !dropped.is_empty() => {
+                variants_note = format!(" Using the main version again for: {}.", dropped.join(", "));
+            }
+            Ok(()) => {}
+            Err(error) => {
+                discard_staged(&variant_update);
+                variants_note = format!(" The tools' own versions were not updated: {error}");
+            }
+        }
     }
 
     // Re-copy the new content into each tool that had it enabled. The library
@@ -641,10 +719,10 @@ fn apply_skill_update(
         targets::refresh_managed_copies(library_path, data_root, &roots);
 
     let message = if failed_targets.is_empty() {
-        format!("Updated {skill_name} to the latest version.")
+        format!("Updated {skill_name} to the latest version.{variants_note}")
     } else {
         format!(
-            "Updated {skill_name}, but could not refresh: {}.",
+            "Updated {skill_name}, but could not refresh: {}.{variants_note}",
             failed_targets.join(", ")
         )
     };
@@ -1256,8 +1334,11 @@ fn update_from_detected_source(
         synced_commit: String::new(),
         synced_at: unix_ms(),
         url: canonical_url(&parsed.owner, &parsed.repo, &git_ref, &subdir),
+        variants: BTreeMap::new(),
     };
-    let outcome = apply_skill_update(library_path, &staging_skill, &source, &commit, data_root, target_profiles);
+    let variant_update = stage_variant_update(&zip_bytes, &subdir, data_root);
+    let outcome =
+        apply_skill_update(library_path, &staging_skill, &source, &commit, data_root, target_profiles, variant_update);
     let _ = fs::remove_dir_all(&staging_parent);
     outcome
 }
@@ -1822,8 +1903,63 @@ mod tests {
             subdir: "skills/foo".to_string(),
             synced_commit: "old1111111111111111111111111111111111111".to_string(),
             synced_at: 1,
+            variants: BTreeMap::new(),
             url: "https://github.com/o/r/tree/main/skills/foo".to_string(),
         }
+    }
+
+    #[test]
+    fn imports_keep_other_tools_versions_and_updates_refresh_them() {
+        use crate::variants::tests::build_zip as repo_zip;
+        let data_root = unique_temp_dir("import-variants");
+        let main = |body: &str| format!("---\nname: dev\ndescription: Main\n---\n{body}\n");
+        let parsed = parse_github_url("https://github.com/o/r/tree/main/skills/dev").unwrap();
+        let first = repo_zip(&[
+            ("skills/dev/SKILL.md", &main("Main version")),
+            (".codex/skills/dev/SKILL.md", "---\nname: dev\ndescription: Codex\n---\nCodex version\n"),
+        ]);
+        let imported = install_from_zip(&first, &parsed, "main", "skills/dev", "c1", &data_root).unwrap();
+        let library = PathBuf::from(&imported.library_path);
+        let source = read_source_file(&library).unwrap();
+        assert_eq!(source.variants.get("codex").map(String::as_str), Some(".codex/skills/dev"));
+        assert!(fs::read_to_string(library.join("SKILL.md")).unwrap().contains("Main version"));
+        assert!(data_root.join("variants").join("dev").join("codex").join("SKILL.md").is_file());
+
+        let codex_root = data_root.join("codex-root");
+        crate::targets::set_skill_target_enabled_with_root(&library, "codex", true, &data_root, &codex_root).unwrap();
+        let codex_copy = codex_root.join("dev").join("SKILL.md");
+        assert!(fs::read_to_string(&codex_copy).unwrap().contains("Codex version"));
+        let profiles = vec![("codex".to_string(), "Codex".to_string(), codex_root.clone())];
+
+        let update = |zip: &[u8], body: &str, commit: &str| {
+            let staging = unique_temp_dir("import-variants-staging");
+            let new_skill = staging.join("dev");
+            fs::create_dir_all(&new_skill).unwrap();
+            fs::write(new_skill.join("SKILL.md"), main(body)).unwrap();
+            let source = read_source_file(&library).unwrap();
+            let staged = stage_variant_update(zip, "skills/dev", &data_root);
+            let result = apply_skill_update(&library, &new_skill, &source, commit, &data_root, &profiles, staged).unwrap();
+            let _ = fs::remove_dir_all(staging);
+            result
+        };
+
+        // The repository changed its Codex version: Codex gets the new one.
+        let second = repo_zip(&[
+            ("skills/dev/SKILL.md", &main("Main v2")),
+            (".codex/skills/dev/SKILL.md", "---\nname: dev\ndescription: Codex\n---\nCodex v2\n"),
+        ]);
+        update(&second, "Main v2", "c2");
+        assert!(fs::read_to_string(&codex_copy).unwrap().contains("Codex v2"));
+
+        // The repository dropped it: Codex falls back to the main version.
+        let third = repo_zip(&[("skills/dev/SKILL.md", &main("Main v3"))]);
+        let result = update(&third, "Main v3", "c3");
+        assert!(result.message.contains("Using the main version again for: Codex."), "{}", result.message);
+        assert!(fs::read_to_string(&codex_copy).unwrap().contains("Main v3"));
+        assert!(read_source_file(&library).unwrap().variants.is_empty());
+        assert!(!data_root.join("variants").join("dev").exists());
+
+        let _ = fs::remove_dir_all(&data_root);
     }
 
     #[test]
@@ -1860,6 +1996,7 @@ mod tests {
             "new2222222222222222222222222222222222222",
             &data_root,
             &profiles,
+            None,
         )
         .unwrap();
 
@@ -1900,7 +2037,7 @@ mod tests {
         let codex_root = data_root.join("codex-root");
         let profiles = vec![("codex".to_string(), "Codex".to_string(), codex_root)];
         let result =
-            apply_skill_update(&library, &new_skill, &source, "abc1234def", &data_root, &profiles)
+            apply_skill_update(&library, &new_skill, &source, "abc1234def", &data_root, &profiles, None)
                 .unwrap();
 
         assert_eq!(fs::read_to_string(library.join("SKILL.md")).unwrap(), "# NEW\n");

@@ -33,6 +33,8 @@ export interface SkillRecord {
   issues?: string[];
   /** Library skills: the tools it may not suit (tools it suits are left out). */
   compat?: CompatSummary[];
+  /** Library skills: tools that get their own version from the repository. */
+  variants?: Array<{ targetId: string; path: string }>;
 }
 
 export type CompatLevel = "compatible" | "degraded" | "incompatible";

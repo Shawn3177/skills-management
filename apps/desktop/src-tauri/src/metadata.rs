@@ -48,6 +48,14 @@ pub fn update_skill_metadata_with_roots(
         fs::read_to_string(&skill_file).map_err(|error| format!("Could not read SKILL.md: {error}"))?;
     let updated = rewrite_frontmatter(&contents, &name, &description);
     fs::write(&skill_file, updated).map_err(|error| format!("Could not write SKILL.md: {error}"))?;
+    // The tools' own versions carry the same name and description.
+    for version in crate::variants::variant_dirs(library_path) {
+        let version_file = version.join("SKILL.md");
+        if let Ok(contents) = fs::read_to_string(&version_file) {
+            fs::write(&version_file, rewrite_frontmatter(&contents, &name, &description))
+                .map_err(|error| format!("Could not write SKILL.md: {error}"))?;
+        }
+    }
 
     let (refreshed_targets, failed_targets) =
         targets::refresh_managed_copies(library_path, data_root, target_roots);
@@ -154,6 +162,23 @@ mod tests {
             rewrite_frontmatter("# Plain\n", "n", "d"),
             "---\nname: \"n\"\ndescription: \"d\"\n---\n# Plain\n"
         );
+    }
+
+    #[test]
+    fn saving_renames_the_tools_own_versions_too() {
+        let data_root = test_temp_dir("metadata-variants");
+        let library_skill = data_root.join("library").join("dev");
+        fs::create_dir_all(&library_skill).unwrap();
+        fs::write(library_skill.join("SKILL.md"), "---\nname: dev\n---\n# Main\n").unwrap();
+        let codex_version = data_root.join("variants").join("dev").join("codex");
+        fs::create_dir_all(&codex_version).unwrap();
+        fs::write(codex_version.join("SKILL.md"), "---\nname: dev\n---\n# Codex\n").unwrap();
+
+        update_skill_metadata_with_roots(&library_skill, "Dev cycle", "Ship it", &data_root, &[]).unwrap();
+
+        let version = fs::read_to_string(codex_version.join("SKILL.md")).unwrap();
+        assert!(version.contains("Dev cycle") && version.contains("Ship it") && version.contains("# Codex"));
+        fs::remove_dir_all(data_root).unwrap();
     }
 
     #[test]

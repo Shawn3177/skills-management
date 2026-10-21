@@ -13,6 +13,7 @@ mod scanner;
 mod series;
 mod targets;
 mod trash;
+mod variants;
 use github::{
     check_skill_updates as check_skill_updates_impl, import_from_github as import_from_github_impl,
     find_skill_sources as find_skill_sources_impl, import_github_skills as import_github_skills_impl, link_github_series as link_github_series_impl,

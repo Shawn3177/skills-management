@@ -110,6 +110,7 @@ const zhCN = {
   "series.unlinked": "已取消关联 {repo}",
 
   "notice.enabled": "已在 {tool} 中启用 {skill}。",
+  "notice.enabledVariant": "已在 {tool} 中启用 {skill}，用的是仓库专门为 {tool} 提供的版本（{path}）。",
   "notice.disabled": "已在 {tool} 中停用 {skill}，副本已移入回收站。",
   "notice.added": "已把 {skill} 加入共享库。",
   "notice.addedAndAdopted": "已把 {skill} 加入共享库，{tool} 里原来的文件夹改由 Skills Manage 管理。",
@@ -124,6 +125,8 @@ const zhCN = {
   "detail.location": "位置",
   "detail.source": "来源",
   "detail.files": "文件",
+  "detail.variants": "专属版本",
+  "detail.variantItem": "{tool}：{path}",
   "detail.loading": "正在读取 SKILL.md…",
   "detail.empty": "SKILL.md 里除了名称和描述没有其他内容。",
   "detail.notEnabled": "还没有在任何工具里启用",
@@ -414,6 +417,7 @@ const enUS: Record<MessageKey, string> = {
   "series.unlinked": "Unlinked {repo}",
 
   "notice.enabled": "Enabled {skill} in {tool}.",
+  "notice.enabledVariant": "Enabled {skill} in {tool}, using the repository's own {tool} version ({path}).",
   "notice.disabled": "Disabled {skill} in {tool}. The copy moved to trash.",
   "notice.added": "Added {skill} to the shared library.",
   "notice.addedAndAdopted": "Added {skill} to the shared library. Its folder in {tool} is now managed by Skills Manage.",
@@ -428,6 +432,8 @@ const enUS: Record<MessageKey, string> = {
   "detail.location": "Location",
   "detail.source": "Source",
   "detail.files": "Files",
+  "detail.variants": "Tool versions",
+  "detail.variantItem": "{tool}: {path}",
   "detail.loading": "Reading SKILL.md…",
   "detail.empty": "SKILL.md has nothing beyond its name and description.",
   "detail.notEnabled": "Not enabled in any tool yet",

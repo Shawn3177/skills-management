@@ -623,6 +623,32 @@ describe("App", () => {
     );
   });
 
+  it("says when a tool got its own version of a skill, and lists the versions on the details page", async () => {
+    const dev = {
+      ...safety,
+      variants: [{ targetId: "codex", path: ".agents/skills/dev" }],
+    };
+    mockBackend(
+      {
+        set_skill_target_enabled: () => ({ enabled: true, changed: true, variant: ".agents/skills/dev" }),
+        read_skill_markdown: () => "Body",
+      },
+      [review, dev, broken],
+    );
+    await renderApp();
+
+    fireEvent.click(within(card("agent-tool-safety")).getByRole("button", { name: "Enable agent-tool-safety in Codex" }));
+    expect(
+      await screen.findByText(
+        "Enabled agent-tool-safety in Codex, using the repository's own Codex version (.agents/skills/dev).",
+      ),
+    ).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "agent-tool-safety" }));
+    expect(await screen.findByText("Tool versions")).toBeInTheDocument();
+    expect(screen.getByText("Codex: .agents/skills/dev")).toBeInTheDocument();
+  });
+
   it("does not ask again in a tool the user marked as working", async () => {
     mockBackend(
       { set_skill_target_enabled: () => ({ enabled: true, changed: true }) },

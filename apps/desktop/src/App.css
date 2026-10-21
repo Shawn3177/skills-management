@@ -1544,6 +1544,12 @@ a:hover {
   overflow-wrap: anywhere;
 }
 
+.detail-variants {
+  display: grid;
+  gap: 2px;
+  font-family: var(--mono);
+}
+
 .detail-files {
   display: flex;
   flex-wrap: wrap;
