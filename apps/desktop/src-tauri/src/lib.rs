@@ -209,6 +209,20 @@ async fn update_skill_from_github(library_path: String) -> Result<UpdateResult, 
 }
 
 #[tauri::command]
+async fn detect_skill_variants(library_path: String) -> Result<github::DetectVariantsResult, String> {
+    run_write(move || github::detect_skill_variants(library_path)).await
+}
+
+#[tauri::command]
+async fn set_skill_variant_choice(
+    library_path: String,
+    target_id: String,
+    choice: variants::VariantChoice,
+) -> Result<variants::VariantChoiceResult, String> {
+    run_write(move || variants::set_variant_choice(library_path, target_id, choice)).await
+}
+
+#[tauri::command]
 async fn check_skill_compat(source_path: String, target_id: String) -> Result<compat::CompatReport, String> {
     run_blocking(move || compat::check_skill_compat(source_path, target_id)).await
 }
@@ -286,6 +300,8 @@ pub fn run() {
             unlink_github_series,
             check_skill_updates,
             update_skill_from_github,
+            detect_skill_variants,
+            set_skill_variant_choice,
             check_skill_compat,
             acknowledge_skill_compat,
             set_skill_target_enabled,

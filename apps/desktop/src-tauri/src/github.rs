@@ -417,6 +417,81 @@ fn fetch_blob(agent: &ureq::Agent, owner: &str, repo: &str, sha: &str) -> Result
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct DetectVariantsResult {
+    pub skill_name: String,
+    /// Every tool version the skill has now.
+    pub variants: Vec<variants::VariantInfo>,
+    pub refreshed_targets: Vec<String>,
+    pub failed_targets: Vec<String>,
+    pub message: String,
+}
+
+/// Look for other tools' versions of a skill added from GitHub before they
+/// were kept (detection used to run only on import and update). Downloads the
+/// commit the library copy came from, so the versions match it.
+pub fn detect_skill_variants(library_path: String) -> Result<DetectVariantsResult, String> {
+    let data_root = default_data_root()?;
+    let target_profiles = real_toggleable_targets()?;
+    let library_path = targets::validate_library_skill(Path::new(&library_path), &data_root)?;
+    let source = read_source_file(&library_path)
+        .ok_or_else(|| "Only skills added from GitHub can be checked for tool versions.".to_string())?;
+    let commit = if source.synced_commit.is_empty() { &source.git_ref } else { &source.synced_commit };
+    let agent = build_agent()?;
+    let zip_bytes =
+        download_zipball(&agent, &source.owner, &source.repo, commit).map_err(|error| error.message())?;
+    apply_detected_variants(&library_path, &source, &zip_bytes, &data_root, &target_profiles)
+}
+
+/// Keep the tool versions found in `zip_bytes` beside the library skill,
+/// record them in its source file, and re-copy the skill into each tool that
+/// has it enabled and now gets a different version.
+fn apply_detected_variants(
+    library_path: &Path,
+    source: &GithubSource,
+    zip_bytes: &[u8],
+    data_root: &Path,
+    target_profiles: &[(String, String, PathBuf)],
+) -> Result<DetectVariantsResult, String> {
+    let skill_name = dir_skill_name(library_path);
+    let found = variants::detect_in_zip(zip_bytes, &source.subdir)?;
+    let mut affected: Vec<String> = variants::list(library_path).into_iter().map(|info| info.target_id).collect();
+    affected.extend(found.iter().map(|(tool, _)| tool.clone()));
+
+    let staged = variants::stage(zip_bytes, &found, data_root)?;
+    if let Err(error) = variants::put_in_place(data_root, &skill_name, staged.as_deref()) {
+        if let Some(staged) = &staged {
+            let _ = fs::remove_dir_all(staged);
+        }
+        return Err(error);
+    }
+    let updated = GithubSource { variants: found.into_iter().collect(), ..source.clone() };
+    write_source_file(library_path, &updated)?;
+
+    let roots: Vec<(&str, PathBuf)> = target_profiles
+        .iter()
+        .filter(|(id, _, _)| affected.contains(id))
+        .map(|(id, _name, root)| (id.as_str(), root.clone()))
+        .collect();
+    let (refreshed_targets, failed_targets) = targets::refresh_managed_copies(library_path, data_root, &roots);
+
+    let variants = variants::list(library_path);
+    let mut message = if variants.is_empty() {
+        format!("The repository has no other tool versions of {skill_name}.")
+    } else {
+        let tools: Vec<&str> = variants
+            .iter()
+            .map(|info| targets::target_name_for(&info.target_id).unwrap_or(&info.target_id))
+            .collect();
+        format!("Found versions of {skill_name} for: {}.", tools.join(", "))
+    };
+    if !failed_targets.is_empty() {
+        message.push_str(&format!(" Could not refresh: {}.", failed_targets.join(", ")));
+    }
+    Ok(DetectVariantsResult { skill_name, variants, refreshed_targets, failed_targets, message })
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct FailedImport {
     pub url: String,
     pub error: String,
@@ -1996,6 +2071,55 @@ mod tests {
             variants: BTreeMap::new(),
             url: "https://github.com/o/r/tree/main/skills/foo".to_string(),
         }
+    }
+
+    #[test]
+    fn detecting_versions_later_keeps_them_and_refreshes_enabled_tools() {
+        use crate::variants::tests::build_zip as repo_zip;
+        let data_root = unique_temp_dir("detect-variants");
+        let main = "---\nname: dev\ndescription: Main\n---\nMain version\n";
+        let library = data_root.join("library").join("dev");
+        fs::create_dir_all(&library).unwrap();
+        fs::write(library.join("SKILL.md"), main).unwrap();
+        // Imported before tool versions were kept: no `variants` recorded.
+        let source = GithubSource { subdir: "skills/dev".to_string(), ..sample_source() };
+        write_source_file(&library, &source).unwrap();
+
+        let codex_root = data_root.join("codex-root");
+        let claude_root = data_root.join("claude-root");
+        for (id, root) in [("codex", &codex_root), ("claude-code", &claude_root)] {
+            crate::targets::set_skill_target_enabled_with_root(&library, id, true, &data_root, root).unwrap();
+        }
+        let profiles = vec![
+            ("codex".to_string(), "Codex".to_string(), codex_root.clone()),
+            ("claude-code".to_string(), "Claude Code".to_string(), claude_root.clone()),
+        ];
+
+        let zip = repo_zip(&[
+            ("skills/dev/SKILL.md", main),
+            (".codex/skills/dev/SKILL.md", "---\nname: dev\ndescription: Codex\n---\nCodex version\n"),
+        ]);
+        let result = apply_detected_variants(&library, &source, &zip, &data_root, &profiles).unwrap();
+        assert_eq!(result.variants.len(), 1);
+        assert_eq!(result.variants[0].target_id, "codex");
+        assert_eq!(result.variants[0].path, ".codex/skills/dev");
+        // Only the tool whose version changed is re-copied.
+        assert_eq!(result.refreshed_targets, vec!["Codex".to_string()]);
+        assert!(result.message.contains("Found versions of dev for: Codex."), "{}", result.message);
+        let recorded = read_source_file(&library).unwrap();
+        assert_eq!(recorded.variants.get("codex").map(String::as_str), Some(".codex/skills/dev"));
+        assert_eq!(recorded.synced_commit, source.synced_commit);
+        assert!(fs::read_to_string(codex_root.join("dev").join("SKILL.md")).unwrap().contains("Codex version"));
+        assert_eq!(fs::read_to_string(claude_root.join("dev").join("SKILL.md")).unwrap(), main);
+
+        // Nothing else in the repository: says so and changes nothing.
+        let plain = repo_zip(&[("skills/dev/SKILL.md", main)]);
+        let detected_again = apply_detected_variants(&library, &recorded, &plain, &data_root, &profiles[1..]).unwrap();
+        assert!(detected_again.variants.is_empty());
+        assert!(detected_again.refreshed_targets.is_empty());
+        assert!(detected_again.message.contains("no other tool versions"), "{}", detected_again.message);
+
+        let _ = fs::remove_dir_all(&data_root);
     }
 
     #[test]

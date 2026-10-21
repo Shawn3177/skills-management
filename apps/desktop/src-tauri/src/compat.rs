@@ -242,7 +242,7 @@ pub fn library_skill_summaries(skill_dir: &Path) -> Vec<CompatSummary> {
     let library_version = inspect(skill_dir);
     let variants: BTreeMap<&str, Inspection> = targets::TOOLS
         .iter()
-        .filter_map(|(target_id, _, _)| Some((*target_id, inspect(&crate::variants::variant_for(skill_dir, target_id)?))))
+        .filter_map(|(target_id, _, _)| Some((*target_id, inspect(&crate::variants::chosen_variant(skill_dir, target_id)?))))
         .collect();
     if library_version.features.is_empty() && variants.values().all(|inspection| inspection.features.is_empty()) {
         return Vec::new();
