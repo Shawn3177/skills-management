@@ -1,5 +1,68 @@
 @import "tailwindcss";
 
+.projects-page {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.project-toolbar,
+.project-path,
+.project-target,
+.project-local {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.project-select {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.project-select select {
+  width: 100%;
+  min-width: 0;
+  height: 36px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  padding: 0 10px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+}
+
+.project-toolbar { align-items: flex-end; }
+.project-path > span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.project-skills { margin-top: 12px; }
+.project-skill { border-bottom: 1px solid var(--line); padding: 18px 0; }
+.project-skill-heading { margin-bottom: 12px; }
+.project-skill-heading p { margin-top: 4px; overflow-wrap: anywhere; }
+.project-targets { display: grid; gap: 10px; }
+.project-target { flex-wrap: wrap; }
+
+.project-target-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  width: 118px;
+}
+
+.project-target-path {
+  flex: 1;
+  min-width: 140px;
+  overflow-wrap: anywhere;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.project-local { padding: 12px 0; border-bottom: 1px solid var(--line); }
+.project-local > div { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.projects-page section h2 { font-size: 14px; font-weight: 600; }
+
 /*
  * Visual language follows the classic CC Switch layout: a white window, the
  * app title in blue, a gray pill switcher for tools, a framed icon group and an

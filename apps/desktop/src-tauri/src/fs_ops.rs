@@ -65,7 +65,7 @@ pub(crate) fn excluded_entries() -> &'static [&'static str] {
 /// target folder, or a `.skillpack` (they are per-machine and would otherwise
 /// leak provenance/links across copies and exports).
 pub(crate) fn is_internal_marker(name: &str) -> bool {
-    name == LINK_MARKER_FILE || name == SOURCE_MARKER_FILE
+    name == LINK_MARKER_FILE || name == SOURCE_MARKER_FILE || name == crate::projects::PROJECT_MARKER
 }
 
 /// True when `name` is a relative path with no `..`/root/prefix components, i.e.

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { save } from "@tauri-apps/plugin-dialog";
 import { openUrl, revealItemInDir } from "@tauri-apps/plugin-opener";
-import { FolderGit2, Package, Plus, Settings } from "lucide-react";
+import { FolderGit2, FolderOpen, Package, Plus, Settings } from "lucide-react";
 import "./App.css";
 import { AddView, type AddRequest } from "./components/AddView";
 import { DetailView } from "./components/DetailView";
@@ -11,6 +11,7 @@ import { MainView, type ScanState, type Tab } from "./components/MainView";
 import { SettingsView } from "./components/SettingsView";
 import { SyncView } from "./components/SyncView";
 import { ToolSwitcher } from "./components/ToolSwitcher";
+import { ProjectsView } from "./components/ProjectsView";
 import { NoticeBar, PageHeader, type Notice } from "./components/ui";
 import { WindowControls } from "./components/WindowControls";
 import { demoSkills } from "./data/demoSkills";
@@ -43,6 +44,7 @@ type View =
   | { name: "add" }
   | { name: "sync" }
   | { name: "github" }
+  | { name: "projects" }
   | { name: "settings" };
 
 function App() {
@@ -680,9 +682,12 @@ function App() {
 
   const editing = view.name === "edit" ? library.find((skill) => skill.sourcePath === view.path) : undefined;
   const showing = view.name === "detail" ? records.find((skill) => skill.sourcePath === view.path) : undefined;
-  const backToMain = () => go({ name: "main" });
+  const backToMain = () => {
+    go({ name: "main" });
+    if (view.name === "projects") void loadSkills();
+  };
   const pageTitle =
-    view.name === "edit"
+    view.name === "projects" ? t("projects.title") : view.name === "edit"
       ? t("edit.title", { skill: editing?.name ?? "" })
       : view.name === "detail"
         ? (showing?.name ?? "")
@@ -712,6 +717,10 @@ function App() {
           </div>
 
           <ToolSwitcher t={t} tab={tab} library={library} onChange={setTab} />
+
+          <button type="button" className="icon-button framed" aria-label={t("projects.title")} title={t("projects.title")} onClick={() => go({ name: "projects" })}>
+            <FolderOpen size={17} strokeWidth={1.8} aria-hidden="true" />
+          </button>
 
           <button
             type="button"
@@ -744,6 +753,7 @@ function App() {
       <NoticeBar notice={notice} />
 
       <div className="view scroll-surface">
+        {view.name === "projects" ? <ProjectsView t={t} onOpenFolder={(path) => void openFolder(path)} /> : null}
         {view.name === "main" ? (
           <MainView
             t={t}

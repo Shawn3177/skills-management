@@ -9,6 +9,7 @@ mod github;
 mod library;
 mod metadata;
 mod pack;
+mod projects;
 mod scanner;
 mod series;
 mod snapshot;
@@ -108,6 +109,44 @@ fn get_app_status() -> AppStatus {
 #[tauri::command]
 async fn scan_skills() -> Result<Vec<ScannedSkill>, String> {
     run_blocking(|| Ok(scan_default_skills())).await
+}
+
+#[tauri::command]
+async fn list_projects() -> Result<Vec<projects::Project>, String> {
+    run_blocking(projects::list_projects).await
+}
+
+#[tauri::command]
+async fn add_project(path: String) -> Result<projects::Project, String> {
+    run_write(move || projects::add_project(path)).await
+}
+
+#[tauri::command]
+async fn forget_project(path: String) -> Result<Vec<projects::Project>, String> {
+    run_write(move || projects::forget_project(path)).await
+}
+
+#[tauri::command]
+async fn scan_project(path: String) -> Result<projects::ProjectSnapshot, String> {
+    run_write(move || projects::scan_project(path)).await
+}
+
+#[tauri::command]
+async fn deploy_project_skill(
+    project_path: String,
+    library_path: String,
+    target_id: String,
+    enabled: bool,
+    expected_fingerprint: Option<String>,
+) -> Result<(), String> {
+    run_write(move || {
+        projects::deploy_project_skill(project_path, library_path, target_id, enabled, expected_fingerprint)
+    }).await
+}
+
+#[tauri::command]
+async fn import_project_skill(project_path: String, source_path: String) -> Result<ImportResult, String> {
+    run_write(move || projects::import_project_skill(project_path, source_path)).await
 }
 
 #[tauri::command]
@@ -282,6 +321,12 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
             get_app_status,
+            list_projects,
+            add_project,
+            forget_project,
+            scan_project,
+            deploy_project_skill,
+            import_project_skill,
             scan_skills,
             scan_skill_folder,
             import_skill_to_library,

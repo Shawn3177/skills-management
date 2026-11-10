@@ -140,7 +140,27 @@ export type TrashSummary = { path: string; entries: number; totalBytes: number; 
 
 export type PurgeResult = { removed: number; failed: number };
 
+export type Project = { name: string; path: string };
+export type ProjectTarget = {
+  id: ToolId;
+  path: string;
+  state: "available" | "deployed" | "outdated" | "modified" | "conflict";
+  fingerprint?: string | null;
+};
+export type ProjectSnapshot = {
+  library: Array<{ skill: SkillRecord; targets: ProjectTarget[] }>;
+  local: SkillRecord[];
+};
+
 export const api = {
+  listProjects: () => invoke<Project[]>("list_projects"),
+  addProject: (path: string) => invoke<Project>("add_project", { path }),
+  forgetProject: (path: string) => invoke<Project[]>("forget_project", { path }),
+  scanProject: (path: string) => invoke<ProjectSnapshot>("scan_project", { path }),
+  deployProjectSkill: (projectPath: string, libraryPath: string, targetId: ToolId, enabled: boolean, expectedFingerprint?: string) =>
+    invoke<void>("deploy_project_skill", { projectPath, libraryPath, targetId, enabled, expectedFingerprint }),
+  importProjectSkill: (projectPath: string, sourcePath: string) =>
+    invoke<ImportResult>("import_project_skill", { projectPath, sourcePath }),
   scanSkills: () => invoke<SkillRecord[]>("scan_skills"),
   scanFolder: (folder: string) => invoke<SkillRecord[]>("scan_skill_folder", { folder }),
   appStatus: () => invoke<AppStatus>("get_app_status"),
