@@ -138,6 +138,83 @@ describe("App", () => {
     cleanup();
   });
 
+  async function openPublicPreview(handlers: Record<string, Handler> = {}) {
+    mockBackend({
+      list_projects: () => [{ name: "Demo", path: "D:/Demo" }],
+      search_public_skills: () => ({ skills: [{ id: "owner/repo/pdf", name: "pdf", source: "owner/repo", skillId: "pdf", installs: 10 }], unsupported: 0 }),
+      resolve_public_skill: () => ({ repositoryId: "repository", paths: ["skills/pdf"], suggestedPath: "skills/pdf" }),
+      preview_public_skill: () => ({ previewId: "reviewed-commit", name: "pdf", description: "Work with PDFs", source: "owner/repo", path: "skills/pdf", commit: "a".repeat(40), url: "https://github.com/owner/repo/tree/main/skills/pdf", markdown: "# Review this skill", files: ["SKILL.md"], installedPath: null }),
+      import_public_skill: () => ({ libraryPath: `${LIB}/pdf`, alreadyInstalled: false }),
+      check_skill_compat: () => ({ level: "compatible", acknowledged: false }),
+      deploy_project_skill: () => null,
+      ...handlers,
+    });
+    await renderApp();
+    fireEvent.click(screen.getByRole("button", { name: "Add skill" }));
+    fireEvent.click(screen.getByRole("button", { name: "Public search" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "Search public skills" }), { target: { value: "pdf" } });
+    fireEvent.click(screen.getByRole("button", { name: "Search" }));
+    fireEvent.click(await screen.findByRole("button", { name: /pdf.*owner\/repo/ }));
+    await screen.findByRole("region", { name: "Skill preview" });
+  }
+
+  it("imports a reviewed public skill to the library without enabling tools by default", async () => {
+    await openPublicPreview();
+    fireEvent.click(screen.getByRole("button", { name: "Public search" }));
+    expect(screen.getByRole("button", { name: "Save to library" })).toBeEnabled();
+    fireEvent.click(screen.getByRole("button", { name: "Save to library" }));
+    await screen.findByText("Added 1 skills.");
+    expect(calls("import_public_skill")).toEqual([{ previewId: "reviewed-commit" }]);
+    expect(calls("set_skill_target_enabled")).toEqual([]);
+    expect(calls("deploy_project_skill")).toEqual([]);
+  });
+
+  it("deploys a public skill only into the selected project after compatibility confirmation", async () => {
+    await openPublicPreview({ check_skill_compat: () => ({ level: "incompatible", acknowledged: false }) });
+    fireEvent.change(screen.getByRole("combobox", { name: "Save and deploy to" }), { target: { value: "project" } });
+    expect(screen.getByRole("combobox", { name: "Current project" })).toHaveValue("D:/Demo");
+    fireEvent.click(screen.getByRole("button", { name: "Codex" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save and deploy" }));
+    await screen.findByText("Added 1 skills. 1 may not suit their tool and were not enabled: pdf → Codex.");
+    expect(calls("deploy_project_skill")).toEqual([]);
+    fireEvent.click(screen.getByRole("button", { name: "Enable them anyway" }));
+    await waitFor(() => expect(calls("deploy_project_skill")).toEqual([{ projectPath: "D:/Demo", libraryPath: `${LIB}/pdf`, targetId: "codex", enabled: true, expectedFingerprint: undefined }]));
+    expect(calls("set_skill_target_enabled")).toEqual([]);
+  });
+
+  it("reports reuse when a public skill was already imported, without replacing it", async () => {
+    await openPublicPreview({ import_public_skill: () => ({ libraryPath: `${LIB}/pdf`, alreadyInstalled: true }) });
+    fireEvent.click(screen.getByRole("button", { name: "Save to library" }));
+    await screen.findByText("Used the existing library copy. Your local edits were preserved.");
+    expect(calls("import_public_skill")).toEqual([{ previewId: "reviewed-commit" }]);
+    expect(calls("set_skill_target_enabled")).toEqual([]);
+  });
+
+  it("keeps the public import but does not deploy when compatibility checking fails", async () => {
+    await openPublicPreview({ check_skill_compat: () => { throw new Error("Compatibility read failed"); } });
+    fireEvent.change(screen.getByRole("combobox", { name: "Save and deploy to" }), { target: { value: "global" } });
+    fireEvent.click(screen.getByRole("button", { name: "Codex" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save and deploy" }));
+    await screen.findByText(/Compatibility read failed/);
+    expect(calls("import_public_skill")).toHaveLength(1);
+    expect(calls("set_skill_target_enabled")).toEqual([]);
+  });
+
+  it("reports a deployment failure even when another public target awaits confirmation", async () => {
+    await openPublicPreview({
+      check_skill_compat: (args) => ({ level: args?.targetId === "codex" ? "compatible" : "incompatible", acknowledged: false }),
+      deploy_project_skill: () => { throw new Error("Project copy has local edits"); },
+    });
+    fireEvent.change(screen.getByRole("combobox", { name: "Save and deploy to" }), { target: { value: "project" } });
+    fireEvent.click(screen.getByRole("button", { name: "Codex" }));
+    fireEvent.click(screen.getByRole("button", { name: "Claude Code" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save and deploy" }));
+    await screen.findByRole("button", { name: "Enable them anyway" });
+    expect(screen.getByText(/Project copy has local edits/)).toBeInTheDocument();
+    expect(calls("deploy_project_skill")).toHaveLength(1);
+    expect(calls("set_skill_target_enabled")).toEqual([]);
+  });
+
   it("opens on the All tab with every library skill and its tools", async () => {
     mockBackend();
     await renderApp();

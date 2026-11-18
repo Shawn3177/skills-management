@@ -1,5 +1,22 @@
 @import "tailwindcss";
 
+.public-discovery { display: grid; gap: 16px; margin-top: 20px; }
+.public-search-row, .public-preview-heading { display: flex; align-items: center; gap: 12px; }
+.public-search-row .text-input { flex: 1; min-width: 0; }
+.public-results { max-height: 260px; overflow-y: auto; border-block: 1px solid var(--line); }
+.public-results:empty { display: none; }
+.public-result { display: flex; align-items: center; justify-content: space-between; gap: 16px; width: 100%; padding: 12px; text-align: left; border-bottom: 1px solid var(--line); }
+.public-result > span:first-child { display: grid; gap: 4px; min-width: 0; overflow-wrap: anywhere; }
+.public-result > span:last-child { flex-shrink: 0; }
+.public-result.selected { background: var(--accent-soft); box-shadow: inset 3px 0 var(--accent); }
+.public-result:hover { background: var(--soft); }
+.public-preview { display: grid; gap: 12px; border-top: 1px solid var(--line); padding-top: 16px; min-width: 0; scroll-margin-top: 16px; }
+.public-preview-heading { flex-wrap: wrap; }
+.public-preview-heading strong { flex: 1; overflow-wrap: anywhere; }
+.public-preview > p { overflow-wrap: anywhere; }
+.public-markdown { max-height: 380px; overflow: auto; padding: 12px; border: 1px solid var(--line); border-radius: var(--radius); }
+.public-files { max-height: 160px; overflow: auto; margin-top: 8px; font-size: 12px; overflow-wrap: anywhere; }
+
 .projects-page {
   display: flex;
   flex-direction: column;

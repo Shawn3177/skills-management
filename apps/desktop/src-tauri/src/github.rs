@@ -243,6 +243,16 @@ pub fn import_from_github_with_root(
     install_from_snapshot(snapshot.as_mut(), &parsed, &git_ref, &subdir, &synced_commit, data_root)
 }
 
+/// Import the exact reviewed commit while tracking its original branch for updates.
+pub(crate) fn import_previewed_skill(source: &GithubSource, data_root: &Path) -> Result<GithubImportResult, String> {
+    let parsed = parse_github_url(&format!("https://github.com/{}/{}", source.owner, source.repo))?;
+    let agent = build_agent()?;
+    let bytes = download_zipball(&agent, &source.owner, &source.repo, &source.synced_commit)
+        .map_err(|error| error.message())?;
+    let mut snapshot = open_snapshot(&agent, &source.owner, &source.repo, &source.synced_commit, &bytes, &source.subdir)?;
+    install_from_snapshot(snapshot.as_mut(), &parsed, &source.git_ref, &source.subdir, &source.synced_commit, data_root)
+}
+
 /// Place the skill at `subdir` of a repository in the library and record
 /// where it came from.
 fn install_from_snapshot(
@@ -409,7 +419,7 @@ fn tree_snapshot<'a>(
 }
 
 /// One file's contents by blob id.
-fn fetch_blob(agent: &ureq::Agent, owner: &str, repo: &str, sha: &str) -> Result<Vec<u8>, GithubError> {
+pub(crate) fn fetch_blob(agent: &ureq::Agent, owner: &str, repo: &str, sha: &str) -> Result<Vec<u8>, GithubError> {
     let url = format!("https://api.github.com/repos/{owner}/{repo}/git/blobs/{sha}");
     let json = api_get_json(agent, &url)?;
     snapshot::decode_blob(&json).map_err(GithubError::Other)
@@ -1032,7 +1042,7 @@ pub(crate) fn repo_files(
 }
 
 /// Every file in the repository at a commit or branch, with sizes.
-fn repo_tree_files(
+pub(crate) fn repo_tree_files(
     agent: &ureq::Agent,
     owner: &str,
     repo: &str,
@@ -1505,7 +1515,7 @@ fn update_from_detected_source(
     outcome
 }
 
-fn read_source_file(dir: &Path) -> Option<GithubSource> {
+pub(crate) fn read_source_file(dir: &Path) -> Option<GithubSource> {
     let contents = fs::read_to_string(dir.join(SOURCE_MARKER_FILE)).ok()?;
     let source: GithubSource = serde_json::from_str(&contents).ok()?;
     if source.kind == "github" {

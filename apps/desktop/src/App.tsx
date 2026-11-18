@@ -442,6 +442,7 @@ function App() {
     setAdding(true);
     setNotice(null);
     const libraryPaths: string[] = [];
+    let reusedPublic = false;
     let failed = 0;
     let lastError: unknown = null;
 
@@ -455,6 +456,10 @@ function App() {
             lastError = error;
           }
         }
+      } else if (request.kind === "public") {
+        const result = await api.importPublicSkill(request.previewId);
+        libraryPaths.push(result.libraryPath);
+        reusedPublic = result.alreadyInstalled;
       } else if (request.kind === "github") {
         libraryPaths.push((await api.importFromGithub(request.url)).libraryPath);
       } else if (request.kind === "github-many") {
@@ -474,16 +479,21 @@ function App() {
 
     // New skills are checked before they are enabled; ones that may not suit
     // a tool are held back and offered in one question at the end.
-    const held: Array<{ path: string; toolId: ToolId; name: string }> = [];
+    const projectPath = request.kind === "public" ? request.projectPath : undefined;
+    const held: Array<{ path: string; toolId: ToolId; name: string; projectPath?: string }> = [];
     for (const path of libraryPaths) {
       for (const toolId of request.enableIn) {
         try {
-          const report = await api.checkCompat(path, toolId).catch(() => null);
+          const report = await api.checkCompat(path, toolId).catch((error) => {
+            if (request.kind === "public") throw error;
+            return null;
+          });
           if (report && report.level !== "compatible" && !report.acknowledged) {
-            held.push({ path, toolId, name: folderName(path) });
+            held.push({ path, toolId, name: folderName(path), projectPath });
             continue;
           }
-          await api.setTarget(path, toolId, true);
+          if (projectPath) await api.deployProjectSkill(projectPath, path, toolId, true);
+          else await api.setTarget(path, toolId, true);
         } catch (error) {
           console.error("enable after add failed", error);
           failed += 1;
@@ -505,7 +515,7 @@ function App() {
           added: libraryPaths.length,
           count: held.length,
           list: held.map((item) => `${item.name} → ${toolName(item.toolId)}`).join(t("compat.separator")),
-        }),
+        }) + (failed > 0 ? ` ${t("add.partial", { count: libraryPaths.length, failed })} ${describeError(lastError)}` : ""),
         actions: [{ label: t("compat.enableSkipped"), run: () => void enableHeld(held) }],
       });
     } else {
@@ -513,20 +523,23 @@ function App() {
         kind: failed > 0 ? "error" : "success",
         text:
           failed > 0
-            ? t("add.partial", { count: libraryPaths.length, failed })
-            : t("add.done", { count: libraryPaths.length }),
+            ? `${t("add.partial", { count: libraryPaths.length, failed })} ${describeError(lastError)}`
+            : request.kind === "public" && request.enableIn.length > 0
+              ? t(projectPath ? "discover.doneProject" : "discover.doneGlobal")
+              : reusedPublic ? t("discover.reused") : t("add.done", { count: libraryPaths.length }),
       });
     }
     await loadSkills();
   }
 
-  async function enableHeld(held: Array<{ path: string; toolId: ToolId }>) {
+  async function enableHeld(held: Array<{ path: string; toolId: ToolId; projectPath?: string }>) {
     setNotice(null);
     let enabled = 0;
     let lastError: unknown = null;
     for (const item of held) {
       try {
-        await api.setTarget(item.path, item.toolId, true);
+        if (item.projectPath) await api.deployProjectSkill(item.projectPath, item.path, item.toolId, true);
+        else await api.setTarget(item.path, item.toolId, true);
         enabled += 1;
       } catch (error) {
         console.error("enable held skill failed", error);

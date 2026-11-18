@@ -4,6 +4,7 @@ use std::sync::Mutex;
 mod account;
 mod catalog;
 mod compat;
+mod discovery;
 mod fs_ops;
 mod github;
 mod library;
@@ -109,6 +110,26 @@ fn get_app_status() -> AppStatus {
 #[tauri::command]
 async fn scan_skills() -> Result<Vec<ScannedSkill>, String> {
     run_blocking(|| Ok(scan_default_skills())).await
+}
+
+#[tauri::command]
+async fn search_public_skills(query: String) -> Result<discovery::SearchResults, String> {
+    run_blocking(move || discovery::search_public_skills(query)).await
+}
+
+#[tauri::command]
+async fn resolve_public_skill(source: String, skill_id: String) -> Result<discovery::PublicResolution, String> {
+    run_blocking(move || discovery::resolve_public_skill(source, skill_id)).await
+}
+
+#[tauri::command]
+async fn preview_public_skill(repository_id: String, path: String) -> Result<discovery::PublicPreview, String> {
+    run_blocking(move || discovery::preview_public_skill(repository_id, path)).await
+}
+
+#[tauri::command]
+async fn import_public_skill(preview_id: String) -> Result<discovery::PublicImportResult, String> {
+    run_write(move || discovery::import_public_skill(preview_id)).await
 }
 
 #[tauri::command]
@@ -321,6 +342,10 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
             get_app_status,
+            search_public_skills,
+            resolve_public_skill,
+            preview_public_skill,
+            import_public_skill,
             list_projects,
             add_project,
             forget_project,

@@ -141,6 +141,21 @@ export type TrashSummary = { path: string; entries: number; totalBytes: number; 
 export type PurgeResult = { removed: number; failed: number };
 
 export type Project = { name: string; path: string };
+export type PublicSkill = { id: string; source: string; skillId: string; name: string; installs: number };
+export type PublicSearchResults = { skills: PublicSkill[]; unsupported: number };
+export type PublicResolution = { repositoryId: string; paths: string[]; suggestedPath: string | null };
+export type PublicPreview = {
+  previewId: string;
+  name: string;
+  description: string;
+  source: string;
+  path: string;
+  commit: string;
+  url: string;
+  markdown: string;
+  files: string[];
+  installedPath: string | null;
+};
 export type ProjectTarget = {
   id: ToolId;
   path: string;
@@ -153,6 +168,10 @@ export type ProjectSnapshot = {
 };
 
 export const api = {
+  searchPublicSkills: (query: string) => invoke<PublicSearchResults>("search_public_skills", { query }),
+  resolvePublicSkill: (source: string, skillId: string) => invoke<PublicResolution>("resolve_public_skill", { source, skillId }),
+  previewPublicSkill: (repositoryId: string, path: string) => invoke<PublicPreview>("preview_public_skill", { repositoryId, path }),
+  importPublicSkill: (previewId: string) => invoke<{ libraryPath: string; alreadyInstalled: boolean }>("import_public_skill", { previewId }),
   listProjects: () => invoke<Project[]>("list_projects"),
   addProject: (path: string) => invoke<Project>("add_project", { path }),
   forgetProject: (path: string) => invoke<Project[]>("forget_project", { path }),

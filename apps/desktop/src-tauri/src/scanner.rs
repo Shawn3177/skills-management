@@ -166,9 +166,9 @@ struct LockedSkillSource {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct SkillMetadata {
-    name: Option<String>,
-    description: Option<String>,
+pub(crate) struct SkillMetadata {
+    pub name: Option<String>,
+    pub description: Option<String>,
 }
 
 pub fn scan_default_skills() -> Vec<ScannedSkill> {
@@ -763,7 +763,7 @@ pub fn scan_folder(folder: &Path) -> Vec<ScannedSkill> {
     scan_skill_roots_with_target_roots(&[folder.to_path_buf()], &target_roots)
 }
 
-fn parse_skill_metadata(contents: &str) -> SkillMetadata {
+pub(crate) fn parse_skill_metadata(contents: &str) -> SkillMetadata {
     let mut metadata = SkillMetadata {
         name: None,
         description: None,

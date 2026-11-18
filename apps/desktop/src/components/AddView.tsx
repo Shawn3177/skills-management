@@ -1,19 +1,21 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { Package, Plus } from "lucide-react";
 import type { TFunction } from "../i18n/useLocale";
-import { api, errorText, type GithubAccount, type GithubCatalog } from "../lib/api";
+import { api, errorText, type GithubAccount, type GithubCatalog, type Project, type PublicPreview } from "../lib/api";
 import { folderName, tools, type SkillRecord, type ToolId } from "../lib/skills";
 import { MyGithubPicker } from "./MyGithubPicker";
+import { PublicSkillPicker } from "./PublicSkillPicker";
 import { Chip } from "./ui";
 
 export type AddRequest =
   | { kind: "local"; paths: string[]; enableIn: ToolId[] }
   | { kind: "github"; url: string; enableIn: ToolId[] }
   | { kind: "github-many"; urls: string[]; enableIn: ToolId[] }
+  | { kind: "public"; previewId: string; enableIn: ToolId[]; projectPath?: string }
   | { kind: "pack"; path: string; enableIn: ToolId[] };
 
-type Source = "local" | "github" | "mine" | "pack";
+type Source = "local" | "github" | "mine" | "pack" | "public";
 
 type Props = {
   t: TFunction;
@@ -44,6 +46,24 @@ export function AddView(props: Props) {
   const [packPath, setPackPath] = useState<string | null>(null);
   // Claude Code is preselected, as in the design; the user can clear it.
   const [enableIn, setEnableIn] = useState<Set<ToolId>>(new Set<ToolId>(["claude-code"]));
+  const [publicPreview, setPublicPreview] = useState<PublicPreview | null>(null);
+  const [scope, setScope] = useState<"library" | "global" | "project">("library");
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [projectPath, setProjectPath] = useState("");
+  const [projectError, setProjectError] = useState<string | null>(null);
+  const [publicTargets, setPublicTargets] = useState<Set<ToolId>>(new Set());
+
+  useEffect(() => {
+    if (source !== "public") return;
+    let current = true;
+    setProjectError(null);
+    api.listProjects().then((items) => {
+      if (!current) return;
+      setProjects(items);
+      setProjectPath((previous) => items.some((item) => item.path === previous) ? previous : items[0]?.path ?? "");
+    }).catch((error) => { if (current) setProjectError(errorText(error)); });
+    return () => { current = false; };
+  }, [source]);
 
   async function chooseFolder() {
     let picked: string | string[] | null = null;
@@ -110,9 +130,13 @@ export function AddView(props: Props) {
         ? githubUrl.trim().length > 0
         : source === "mine"
           ? picked.size > 0
-          : Boolean(packPath));
+          : source === "public"
+            ? Boolean(publicPreview) && (scope === "library" || (publicTargets.size > 0 && (scope !== "project" || Boolean(projectPath))))
+            : Boolean(packPath));
   const submitLabel = working
     ? t("add.working")
+    : source === "public"
+      ? t(scope !== "library" ? "discover.importDeploy" : publicPreview?.installedPath ? "discover.useExisting" : "discover.import")
     : source === "local"
       ? t("add.submitCount", { count: selected.size })
       : source === "mine"
@@ -125,7 +149,10 @@ export function AddView(props: Props) {
     if (!canSubmit) {
       return;
     }
-    if (source === "local") {
+    if (source === "public" && publicPreview) {
+      onSubmit({ kind: "public", previewId: publicPreview.previewId, enableIn: scope === "library" ? [] : [...publicTargets],
+        ...(scope === "project" ? { projectPath } : {}) });
+    } else if (source === "local") {
       onSubmit({ kind: "local", paths: [...selected], enableIn: enabledTools });
     } else if (source === "github") {
       onSubmit({ kind: "github", url: githubUrl.trim(), enableIn: enabledTools });
@@ -137,6 +164,7 @@ export function AddView(props: Props) {
   }
 
   const sources: Array<{ id: Source; label: string; hint: string }> = [
+    { id: "public", label: t("discover.title"), hint: t("discover.hint") },
     { id: "local", label: t("add.local"), hint: t("add.localHint") },
     { id: "github", label: t("add.github"), hint: t("add.githubHint") },
     { id: "mine", label: t("add.mine"), hint: t("add.mineHint") },
@@ -162,8 +190,11 @@ export function AddView(props: Props) {
                 <Chip
                 key={item.id}
                 pressed={source === item.id}
+                disabled={working}
                 onClick={() => {
+                  if (item.id === source) return;
                   setSource(item.id);
+                  setPublicPreview(null);
                   // The first visit reads the account's repositories once.
                   if (item.id === "mine" && !props.catalog && !props.catalogLoading && props.account?.login) {
                     props.onRefreshCatalog();
@@ -176,6 +207,10 @@ export function AddView(props: Props) {
             </div>
             <span className="field-hint">{sources.find((item) => item.id === source)?.hint}</span>
           </div>
+
+          {source === "public" ? (
+            <PublicSkillPicker t={t} working={working} onSelected={setPublicPreview} onOpenUrl={props.onOpenUrl} />
+          ) : null}
 
           {source === "local" ? (
             <div className="field-group">
@@ -259,7 +294,41 @@ export function AddView(props: Props) {
             </div>
           ) : null}
 
-          <div className="field-group separated">
+          {source === "public" ? (
+            <div className="field-group separated">
+              <label className="field-group">
+                <span className="field-label">{t("discover.destination")}</span>
+                <select className="text-input" value={scope} disabled={working}
+                  onChange={(event) => {
+                    setScope(event.target.value as typeof scope);
+                    setPublicTargets(new Set());
+                  }}>
+                  <option value="library">{t("discover.libraryOnly")}</option>
+                  <option value="global">{t("discover.global")}</option>
+                  <option value="project">{t("discover.project")}</option>
+                </select>
+              </label>
+              {scope === "project" ? (
+                <label className="field-group">
+                  <span className="field-label">{t("projects.select")}</span>
+                  <select className="text-input" value={projectPath} disabled={working || projects.length === 0}
+                    onChange={(event) => setProjectPath(event.target.value)}>
+                    {projects.length === 0 ? <option value="">{t("discover.noProjects")}</option> : null}
+                    {projects.map((project) => <option key={project.path} value={project.path}>{project.name} — {project.path}</option>)}
+                  </select>
+                  {projectError ? <span role="alert" className="field-hint">{projectError}</span> : null}
+                </label>
+              ) : null}
+              {scope !== "library" ? (
+                <div className="chip-row" role="group" aria-label={t("add.enableAfter")}>
+                  {tools.filter((tool) => scope !== "project" || ["codex", "claude-code", "vs-code"].includes(tool.id)).map((tool) => (
+                    <Chip key={tool.id} pressed={publicTargets.has(tool.id)} disabled={working}
+                      onClick={() => setPublicTargets((current) => toggleSet(current, tool.id))}>{tool.name}</Chip>
+                  ))}
+                </div>
+              ) : null}
+            </div>
+          ) : <div className="field-group separated">
             <span className="field-label" id="add-enable-label">
               {t("add.enableAfter")}
             </span>
@@ -274,7 +343,7 @@ export function AddView(props: Props) {
                 </Chip>
               ))}
             </div>
-          </div>
+          </div>}
         </form>
       </div>
 
