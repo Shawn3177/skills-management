@@ -9,6 +9,7 @@ mod github;
 mod library;
 mod metadata;
 mod pack;
+mod programs;
 mod scanner;
 mod series;
 mod snapshot;
@@ -275,6 +276,28 @@ async fn purge_trash(older_than_days: u32) -> Result<PurgeResult, String> {
     run_write(move || trash::purge_trash(older_than_days)).await
 }
 
+#[tauri::command]
+async fn list_program_updates() -> Result<Vec<programs::ProgramUpdate>, String> {
+    run_blocking(programs::list_program_updates).await
+}
+
+#[tauri::command]
+async fn set_program_update(skill_name: String, command: String) -> Result<programs::SetProgramUpdateResult, String> {
+    run_write(move || programs::set_program_update(skill_name, command)).await
+}
+
+#[tauri::command]
+async fn remove_program_update(skill_name: String) -> Result<(), String> {
+    run_write(move || programs::remove_program_update(skill_name)).await
+}
+
+/// Not under the write lock: the program can take minutes and only writes its
+/// own folders.
+#[tauri::command]
+async fn run_program_update(skill_name: String) -> Result<programs::ProgramRunResult, String> {
+    run_blocking(move || programs::run_program_update(skill_name)).await
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -309,7 +332,11 @@ pub fn run() {
             export_skillpack,
             import_skillpack,
             get_trash_summary,
-            purge_trash
+            purge_trash,
+            list_program_updates,
+            set_program_update,
+            remove_program_update,
+            run_program_update
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

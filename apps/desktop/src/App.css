@@ -1561,6 +1561,22 @@ a:hover {
   margin: 0;
 }
 
+.update-method-form {
+  display: grid;
+  gap: 6px;
+  justify-items: start;
+}
+
+.update-method-form .text-input {
+  width: min(100%, 420px);
+}
+
+.update-group {
+  color: var(--text-2);
+  font-size: 13px;
+  font-weight: 600;
+}
+
 .detail-files {
   display: flex;
   flex-wrap: wrap;
