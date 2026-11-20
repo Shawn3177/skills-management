@@ -8,6 +8,7 @@ const saveMock = vi.fn();
 const openMock = vi.fn();
 const openUrlMock = vi.fn();
 const revealMock = vi.fn();
+const checkMock = vi.fn();
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: (...args: unknown[]) => invokeMock(...args),
@@ -21,6 +22,10 @@ vi.mock("@tauri-apps/plugin-dialog", () => ({
 vi.mock("@tauri-apps/plugin-opener", () => ({
   openUrl: (...args: unknown[]) => openUrlMock(...args),
   revealItemInDir: (...args: unknown[]) => revealMock(...args),
+}));
+
+vi.mock("@tauri-apps/plugin-updater", () => ({
+  check: (...args: unknown[]) => checkMock(...args),
 }));
 
 const LIB = "C:/Users/example/.skills-manage/library";
@@ -133,6 +138,8 @@ describe("App", () => {
     openMock.mockReset();
     openUrlMock.mockReset();
     revealMock.mockReset();
+    checkMock.mockReset();
+    checkMock.mockResolvedValue(null);
     localStorage.clear();
     localStorage.setItem("skills-manage.locale", "en-US");
   });
@@ -1463,5 +1470,38 @@ describe("App", () => {
 
     expect(screen.getByRole("heading", { level: 1, name: "设置" })).toBeInTheDocument();
     expect(localStorage.getItem("skills-manage.locale")).toBe("zh-CN");
+  });
+
+  it("offers a new Skills Manage release on launch and installs it", async () => {
+    const downloadAndInstall = vi.fn(async (onEvent: (event: unknown) => void) => {
+      onEvent({ event: "Started", data: { contentLength: 200 } });
+      onEvent({ event: "Progress", data: { chunkLength: 100 } });
+      onEvent({ event: "Finished" });
+    });
+    checkMock.mockResolvedValue({ version: "0.3.0", downloadAndInstall });
+    mockBackend();
+    await renderApp();
+
+    expect(await screen.findByText("Skills Manage 0.3.0 is available.")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Update and restart" }));
+
+    await waitFor(() => expect(downloadAndInstall).toHaveBeenCalledTimes(1));
+    expect(await screen.findByText("Downloaded. Starting the installer; Skills Manage will close and reopen.")).toBeInTheDocument();
+  });
+
+  it("stays quiet when the launch check fails, and reports a manual check", async () => {
+    checkMock.mockRejectedValue("error sending request");
+    mockBackend({ get_trash_summary: () => ({ path: "x", entries: 0, totalBytes: 0, purgeableEntries: 0 }) });
+    await renderApp();
+    await waitFor(() => expect(checkMock).toHaveBeenCalledTimes(1));
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Settings" }));
+    fireEvent.click(screen.getByRole("button", { name: "Check for updates" }));
+    expect(await screen.findByText(/error sending request/)).toBeInTheDocument();
+
+    checkMock.mockResolvedValue(null);
+    fireEvent.click(screen.getByRole("button", { name: "Check for updates" }));
+    expect(await screen.findByText("Skills Manage is up to date.")).toBeInTheDocument();
   });
 });

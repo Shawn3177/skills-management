@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { save } from "@tauri-apps/plugin-dialog";
 import { openUrl, revealItemInDir } from "@tauri-apps/plugin-opener";
+import { check, type Update } from "@tauri-apps/plugin-updater";
 import { FolderGit2, Package, Plus, Settings } from "lucide-react";
 import "./App.css";
 import { AddView, type AddRequest } from "./components/AddView";
@@ -65,6 +66,7 @@ function App() {
   const [programs, setPrograms] = useState<ProgramUpdate[]>([]);
   const [bulk, setBulk] = useState<BulkProgress | null>(null);
   const [appStatus, setAppStatus] = useState<AppStatus | null>(null);
+  const [appUpdate, setAppUpdate] = useState<"idle" | "checking" | "installing">("idle");
   const [saving, setSaving] = useState(false);
   // Bumped when the user changes which tools are shown (tools is a live binding).
   const [, setToolsVersion] = useState(0);
@@ -117,6 +119,62 @@ function App() {
     }
   }
 
+  /**
+   * Asks GitHub Releases (the updater endpoint in tauri.conf.json) for a newer signed build.
+   * The check on launch stays quiet when nothing is found or the network is down.
+   */
+  async function checkAppUpdate(manual: boolean) {
+    setAppUpdate("checking");
+    try {
+      const update = await check();
+      if (update) {
+        setNotice({
+          kind: "success",
+          text: t("appUpdate.available", { version: update.version }),
+          actions: [{ label: t("appUpdate.install"), run: () => void installAppUpdate(update) }],
+        });
+      } else if (manual) {
+        setNotice({ kind: "success", text: t("appUpdate.upToDate") });
+      }
+    } catch (error) {
+      if (manual) {
+        setNotice({ kind: "error", text: describeError(error) });
+      } else {
+        console.warn("update check failed", error);
+      }
+    } finally {
+      setAppUpdate((state) => (state === "checking" ? "idle" : state));
+    }
+  }
+
+  /** On Windows the installer closes the app, installs and reopens it. */
+  async function installAppUpdate(update: Update) {
+    setAppUpdate("installing");
+    setNotice({ kind: "success", text: t("appUpdate.downloading", { version: update.version }) });
+    let total = 0;
+    let received = 0;
+    let shown = -1;
+    try {
+      await update.downloadAndInstall((event) => {
+        if (event.event === "Started") {
+          total = event.data.contentLength ?? 0;
+        } else if (event.event === "Progress" && total > 0) {
+          received += event.data.chunkLength;
+          const percent = Math.min(100, Math.floor((received * 100) / total));
+          if (percent !== shown) {
+            shown = percent;
+            setNotice({ kind: "success", text: t("appUpdate.downloadingPercent", { version: update.version, percent }) });
+          }
+        } else if (event.event === "Finished") {
+          setNotice({ kind: "success", text: t("appUpdate.installing") });
+        }
+      });
+    } catch (error) {
+      setNotice({ kind: "error", text: describeError(error) });
+      setAppUpdate("idle");
+    }
+  }
+
   function go(next: View) {
     setNotice(null);
     setView(next);
@@ -145,6 +203,10 @@ function App() {
   useEffect(() => {
     void loadSkills();
     void loadPrograms();
+    // `tauri dev` would offer to replace itself with the released build.
+    if (import.meta.env.MODE !== "development") {
+      void checkAppUpdate(false);
+    }
     api
       .appStatus()
       .then((status) => {
@@ -1019,6 +1081,9 @@ function App() {
               }
             }}
             onOpenUrl={(url) => void openExternal(url)}
+            onCheckAppUpdate={() => void checkAppUpdate(true)}
+            appUpdateChecking={appUpdate === "checking"}
+            appUpdateBusy={appUpdate !== "idle"}
           />
         ) : null}
       </div>
