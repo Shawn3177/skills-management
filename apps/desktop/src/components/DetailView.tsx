@@ -3,9 +3,17 @@ import { useEffect, useState } from "react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { TFunction } from "../i18n/useLocale";
-import { api, errorText, isBridgeUnavailable, type CompatReport } from "../lib/api";
+import {
+  api,
+  errorText,
+  isBridgeUnavailable,
+  type CompatReport,
+  type ProgramUpdate,
+  type SetProgramUpdateResult,
+} from "../lib/api";
 import { compatFor, compatPlace, compatReason } from "../lib/compat";
 import {
+  folderName,
   githubSource,
   isEnabledIn,
   isLibrarySkill,
@@ -34,6 +42,10 @@ type Props = {
   onCompatChanged: () => void;
   /** A tool's version was switched, or versions were detected: rescan. */
   onVariantsChanged: () => void;
+  /** The command its own program updates this skill with, if one is set. */
+  program?: ProgramUpdate;
+  /** An update command was set (with what it did) or removed (null). */
+  onProgramChanged: (result: SetProgramUpdateResult | null) => void;
 };
 
 /** Everything after the frontmatter block of a SKILL.md. */
@@ -55,6 +67,8 @@ export function DetailView({
   onAddToLibrary,
   onCompatChanged,
   onVariantsChanged,
+  program,
+  onProgramChanged,
 }: Props) {
   const [body, setBody] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -112,6 +126,10 @@ export function DetailView({
               <button type="button" className="button small" disabled>
                 {t("actions.managedByCodex")}
               </button>
+            ) : program ? (
+              <button type="button" className="button small" disabled>
+                {t("actions.managedByProgram")}
+              </button>
             ) : (
               <button type="button" className="button small primary" disabled={busy} onClick={() => onAddToLibrary(skill)}>
                 <FolderPlus size={14} strokeWidth={1.9} aria-hidden="true" />
@@ -155,6 +173,16 @@ export function DetailView({
             </>
           ) : null}
           {inLibrary ? <VariantsFact t={t} skill={skill} onChanged={onVariantsChanged} /> : null}
+          {isManagedByCodex(skill) || skill.origin?.plugin ? null : (
+            <UpdateMethodFact
+              t={t}
+              folder={folderName(skill.sourcePath)}
+              inLibrary={inLibrary}
+              fromGithub={Boolean(github)}
+              program={program}
+              onChanged={onProgramChanged}
+            />
+          )}
           <dt>{t("detail.files")}</dt>
           <dd className="detail-files">
             {skill.supportFiles.map((file) => (
@@ -212,6 +240,127 @@ function toolLabel(targetId: string): string {
  * between that version and the main one. Skills added from GitHub can look
  * for such versions again (those added before they were kept have none).
  */
+/**
+ * How the skill gets new versions. A skill its own program generates (Agent
+ * Reach) is updated by running that program's command; Skills Manage then no
+ * longer copies it.
+ */
+function UpdateMethodFact({
+  t,
+  folder,
+  inLibrary,
+  fromGithub,
+  program,
+  onChanged,
+}: {
+  t: TFunction;
+  folder: string;
+  inLibrary: boolean;
+  fromGithub: boolean;
+  program?: ProgramUpdate;
+  onChanged: (result: SetProgramUpdateResult | null) => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState("");
+  const [working, setWorking] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const inputId = `update-command-${folder}`;
+  const hintId = `${inputId}-hint`;
+
+  function startEditing() {
+    setDraft(program?.command ?? `${folder} update`);
+    setError(null);
+    setEditing(true);
+  }
+
+  async function run(action: () => Promise<SetProgramUpdateResult | null>) {
+    setWorking(true);
+    setError(null);
+    try {
+      const result = await action();
+      setEditing(false);
+      onChanged(result);
+    } catch (reason) {
+      setError(isBridgeUnavailable(reason) ? t("errors.bridge") : errorText(reason));
+    } finally {
+      setWorking(false);
+    }
+  }
+
+  const save = () => run(() => api.setProgramUpdate(folder, draft));
+  const remove = () => run(() => api.removeProgramUpdate(folder).then(() => null));
+
+  return (
+    <>
+      <dt>{t("detail.updateMethod")}</dt>
+      <dd className="update-method">
+        {editing ? (
+          <form
+            className="update-method-form"
+            onSubmit={(event) => {
+              event.preventDefault();
+              void save();
+            }}
+          >
+            <label className="field-label" htmlFor={inputId}>
+              {t("detail.updateCommand")}
+            </label>
+            <input
+              id={inputId}
+              className="text-input mono"
+              value={draft}
+              spellCheck={false}
+              autoComplete="off"
+              autoFocus
+              aria-describedby={hintId}
+              aria-invalid={error ? true : undefined}
+              onChange={(event) => setDraft(event.target.value)}
+              onKeyDown={(event) => event.key === "Escape" && setEditing(false)}
+            />
+            <span className="field-hint" id={hintId}>
+              {t(inLibrary ? "detail.updateCommandLibraryHint" : "detail.updateCommandHint")}
+            </span>
+            {error ? (
+              <span className="danger-text small" role="alert">
+                {error}
+              </span>
+            ) : null}
+            <span className="variant-row">
+              <button type="submit" className="button small primary" disabled={working || !draft.trim()}>
+                {working ? t("edit.saving") : t("edit.save")}
+              </button>
+              <button type="button" className="button small" disabled={working} onClick={() => setEditing(false)}>
+                {t("actions.cancel")}
+              </button>
+            </span>
+          </form>
+        ) : (
+          <span className="variant-row">
+            {program ? (
+              <span className="mono">{program.command}</span>
+            ) : (
+              <span>{t(fromGithub ? "detail.updateFromGithub" : "detail.updateNotSet")}</span>
+            )}
+            <button type="button" className="button small ghost" disabled={working} onClick={startEditing}>
+              {t(program ? "detail.updateCommandChange" : "detail.updateCommandSet")}
+            </button>
+            {program ? (
+              <button type="button" className="button small ghost" disabled={working} onClick={() => void remove()}>
+                {t("detail.updateCommandRemove")}
+              </button>
+            ) : null}
+            {error ? (
+              <span className="danger-text small" role="alert">
+                {error}
+              </span>
+            ) : null}
+          </span>
+        )}
+      </dd>
+    </>
+  );
+}
+
 function VariantsFact({ t, skill, onChanged }: { t: TFunction; skill: SkillRecord; onChanged: () => void }) {
   const [working, setWorking] = useState<string | null>(null);
   const [status, setStatus] = useState<string | null>(null);

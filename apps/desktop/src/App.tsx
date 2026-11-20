@@ -9,7 +9,7 @@ import { EditView, type EditChanges } from "./components/EditView";
 import { GithubView } from "./components/GithubView";
 import { MainView, type ScanState, type Tab } from "./components/MainView";
 import { SettingsView } from "./components/SettingsView";
-import { SyncView } from "./components/SyncView";
+import { programKey, SyncView, type BulkProgress } from "./components/SyncView";
 import { ToolSwitcher } from "./components/ToolSwitcher";
 import { NoticeBar, PageHeader, type Notice } from "./components/ui";
 import { WindowControls } from "./components/WindowControls";
@@ -20,9 +20,12 @@ import {
   api,
   errorText,
   isBridgeUnavailable,
+  programGeneratedSkill,
   type AppStatus,
   type GithubAccount,
   type GithubCatalog,
+  type ProgramUpdate,
+  type SetProgramUpdateResult,
   type SkillUpdateStatus,
 } from "./lib/api";
 import {
@@ -59,6 +62,8 @@ function App() {
   const [checkedAt, setCheckedAt] = useState<Date | null>(null);
   const [checking, setChecking] = useState(false);
   const [updatingPath, setUpdatingPath] = useState<string | null>(null);
+  const [programs, setPrograms] = useState<ProgramUpdate[]>([]);
+  const [bulk, setBulk] = useState<BulkProgress | null>(null);
   const [appStatus, setAppStatus] = useState<AppStatus | null>(null);
   const [saving, setSaving] = useState(false);
   // Bumped when the user changes which tools are shown (tools is a live binding).
@@ -83,8 +88,33 @@ function App() {
   // The sample records live under C:/Users/demo, so show them as ~/… too.
   const home = scanState === "preview" ? "C:/Users/demo" : appStatus?.homeDir ?? null;
 
+  /** The backend's reason, in the user's language where the app knows it. */
+  function reasonText(error: unknown) {
+    const generated = programGeneratedSkill(error);
+    return generated === null ? errorText(error) : t("errors.programGenerated", { skill: generated });
+  }
+
   function describeError(error: unknown) {
-    return isBridgeUnavailable(error) ? t("errors.bridge") : t("notice.failed", { reason: errorText(error) });
+    if (isBridgeUnavailable(error)) {
+      return t("errors.bridge");
+    }
+    return programGeneratedSkill(error) === null ? t("notice.failed", { reason: errorText(error) }) : reasonText(error);
+  }
+
+  /** The update command set for a skill (matched by folder name). */
+  function programFor(skill: SkillRecord) {
+    const folder = folderName(skill.sourcePath).toLowerCase();
+    return programs.find((program) => program.skillName.toLowerCase() === folder);
+  }
+
+  async function loadPrograms() {
+    try {
+      setPrograms(await api.listProgramUpdates());
+    } catch (error) {
+      if (!isBridgeUnavailable(error)) {
+        console.error("list_program_updates failed", error);
+      }
+    }
   }
 
   function go(next: View) {
@@ -114,6 +144,7 @@ function App() {
 
   useEffect(() => {
     void loadSkills();
+    void loadPrograms();
     api
       .appStatus()
       .then((status) => {
@@ -662,6 +693,101 @@ function App() {
     await loadSkills();
   }
 
+  async function runProgram(program: ProgramUpdate) {
+    setUpdatingPath(programKey(program.skillName));
+    setNotice(null);
+    try {
+      await api.runProgramUpdate(program.skillName);
+      setNotice({ kind: "success", text: t("updates.programRan", { skill: program.skillName, command: program.command }) });
+    } catch (error) {
+      console.error("run_program_update failed", error);
+      setNotice({ kind: "error", text: describeError(error) });
+    } finally {
+      setUpdatingPath(null);
+    }
+    await loadSkills();
+  }
+
+  /** One click: check GitHub, update every skill that has a new version, and run every update command. */
+  async function updateAll() {
+    setNotice(null);
+    setChecking(true);
+    let statuses: SkillUpdateStatus[];
+    try {
+      statuses = await api.checkUpdates();
+      setUpdates(statuses);
+      setCheckedAt(new Date());
+    } catch (error) {
+      console.error("check_skill_updates failed", error);
+      setNotice({ kind: "error", text: describeError(error) });
+      return;
+    } finally {
+      setChecking(false);
+    }
+
+    const jobs = [
+      ...statuses
+        .filter((status) => status.hasUpdate)
+        .map((status) => ({ name: status.skillName, key: status.libraryPath, run: () => api.updateSkill(status.libraryPath) })),
+      ...programs.map((program) => ({
+        name: program.skillName,
+        key: programKey(program.skillName),
+        run: () => api.runProgramUpdate(program.skillName),
+      })),
+    ];
+    if (jobs.length === 0) {
+      setNotice({ kind: "success", text: t("updates.allUpToDate") });
+      return;
+    }
+
+    const updated = new Set<string>();
+    const failures: string[] = [];
+    for (const [index, job] of jobs.entries()) {
+      setBulk({ index: index + 1, total: jobs.length, skill: job.name });
+      setUpdatingPath(job.key);
+      try {
+        await job.run();
+        updated.add(job.key);
+      } catch (error) {
+        console.error(`update ${job.name} failed`, error);
+        failures.push(`${job.name}: ${reasonText(error)}`);
+      }
+    }
+    setUpdatingPath(null);
+    setBulk(null);
+    setUpdates((current) =>
+      (current ?? []).map((item) =>
+        updated.has(item.libraryPath)
+          ? { ...item, hasUpdate: false, state: "up-to-date", current: item.latest || item.current }
+          : item,
+      ),
+    );
+    setNotice(
+      failures.length === 0
+        ? { kind: "success", text: t("updates.allDone", { count: updated.size }) }
+        : {
+            kind: "warning",
+            text: t("updates.allPartial", { count: updated.size, failed: failures.length, reasons: failures.join(t("updates.reasonSeparator")) }),
+          },
+    );
+    await loadSkills();
+  }
+
+  /** An update command was set or removed in a skill's details. */
+  async function programChanged(result: SetProgramUpdateResult | null) {
+    await loadPrograms();
+    if (result?.removedFromLibrary) {
+      // The library copy is in the trash now, so its details page is gone.
+      setView({ name: "main" });
+      setNotice({
+        kind: "success",
+        text: t("notice.programHandedOver", { skill: result.program.skillName }),
+        actions: [{ label: t("updates.runNow"), run: () => void runProgram(result.program) }],
+      });
+    }
+    await loadSkills();
+  }
+
   async function openFolder(path: string) {
     try {
       await revealItemInDir(path);
@@ -807,6 +933,8 @@ function App() {
               onAddToLibrary={(skill) => void addLocalToLibrary(skill)}
               onCompatChanged={() => void loadSkills()}
               onVariantsChanged={() => void loadSkills()}
+              program={programFor(showing)}
+              onProgramChanged={(result) => void programChanged(result)}
             />
           ) : (
             <div className="page-body">
@@ -857,11 +985,15 @@ function App() {
             checkedAt={checkedAt}
             checking={checking}
             updatingPath={updatingPath}
+            programs={programs}
+            bulk={bulk}
             libraryCount={library.length}
             sources={library.filter((skill) => githubSource(skill))}
-            waiting={locals.filter((skill) => githubSource(skill)).length}
+            waiting={locals.filter((skill) => githubSource(skill) && !programFor(skill)).length}
             onCheck={() => void checkUpdates()}
+            onUpdateAll={() => void updateAll()}
             onUpdate={(status) => void updateSkill(status)}
+            onRunProgram={(program) => void runProgram(program)}
             onExportAll={() => void exportSkills(library, "skills-library.skillpack")}
           />
         ) : null}
