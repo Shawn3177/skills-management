@@ -36,6 +36,11 @@ type Props = {
   onOpenUrl: (url: string) => void;
   /** Which tools are shown changed (tabs and toggles need a refresh). */
   onToolsChanged: () => void;
+  /** Ask GitHub Releases for a newer Skills Manage; the result shows in the notice bar. */
+  onCheckAppUpdate: () => void;
+  appUpdateChecking: boolean;
+  /** Checking, or downloading and installing an update. */
+  appUpdateBusy: boolean;
 };
 
 /** A classic token needs no scopes to read public repositories and stars. */
@@ -56,6 +61,9 @@ export function SettingsView({
   onDisconnectGithub,
   onOpenUrl,
   onToolsChanged,
+  onCheckAppUpdate,
+  appUpdateChecking,
+  appUpdateBusy,
 }: Props) {
   const [trash, setTrash] = useState<TrashSummary | null>(null);
   const [pasting, setPasting] = useState(false);
@@ -282,6 +290,9 @@ export function SettingsView({
         <div className="setting-row">
           <span className="setting-label">{t("settings.version")}</span>
           <span className="muted">Skills Manage {appStatus?.version ?? ""}</span>
+          <button type="button" className="button small" disabled={appUpdateBusy} onClick={onCheckAppUpdate}>
+            {appUpdateChecking ? t("appUpdate.checking") : t("appUpdate.check")}
+          </button>
         </div>
       </section>
     </div>

@@ -368,6 +368,15 @@ const zhCN = {
   "settings.advanced": "高级",
   "settings.version": "版本",
 
+  "appUpdate.check": "检查更新",
+  "appUpdate.checking": "正在检查…",
+  "appUpdate.upToDate": "Skills Manage 已是最新版本。",
+  "appUpdate.available": "Skills Manage {version} 已发布。",
+  "appUpdate.install": "更新并重启",
+  "appUpdate.downloading": "正在下载 Skills Manage {version}…",
+  "appUpdate.downloadingPercent": "正在下载 Skills Manage {version}（{percent}%）…",
+  "appUpdate.installing": "下载完成，正在启动安装程序，Skills Manage 会自动关闭并重新打开。",
+
   "errors.bridge": "此操作需要在桌面应用窗口中运行。",
   "errors.programGenerated": "{skill} 的 SKILL.md 是模板，要由它自己的程序填写后才能用，所以没有直接复制。请先按它的说明安装这个程序，再在技能详情的「更新方式」里设置程序的更新命令。",
 };
@@ -734,6 +743,15 @@ const enUS: Record<MessageKey, string> = {
   "settings.purgedPartial": "Deleted {count} items; {failed} couldn't be deleted.",
   "settings.advanced": "Advanced",
   "settings.version": "Version",
+
+  "appUpdate.check": "Check for updates",
+  "appUpdate.checking": "Checking…",
+  "appUpdate.upToDate": "Skills Manage is up to date.",
+  "appUpdate.available": "Skills Manage {version} is available.",
+  "appUpdate.install": "Update and restart",
+  "appUpdate.downloading": "Downloading Skills Manage {version}…",
+  "appUpdate.downloadingPercent": "Downloading Skills Manage {version} ({percent}%)…",
+  "appUpdate.installing": "Downloaded. Starting the installer; Skills Manage will close and reopen.",
 
   "errors.bridge": "This action runs in the desktop app window.",
   "errors.programGenerated": "{skill}'s SKILL.md is a template its own program fills in, so it was not copied. Install that program as its instructions say, then set the program's update command under Updates in the skill's details.",

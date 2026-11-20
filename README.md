@@ -40,6 +40,31 @@ npm run package:portable
 
 The Tauri build creates installer bundles under `apps/desktop/src-tauri/target/release/bundle/`.
 The portable script creates a ZIP under `apps/desktop/src-tauri/target/release/bundle/portable/`.
+A local build is unsigned and has no updater files; releases are built by CI.
+
+Run the build from a normal terminal. Inside the Claude desktop app, which is an MSIX package, writes to `%LOCALAPPDATA%` are redirected. Tauri moves its downloaded NSIS toolset across that boundary, so the NSIS step fails with `os error 17`.
+
+## Releasing
+
+Installed copies check `https://github.com/Shawn3177/skills-management/releases/latest/download/latest.json` on launch. They can also check from Settings > Version. A new version is installed with the per-user setup (NSIS, passive mode), and the app then restarts. Only signed builds are accepted.
+
+One-time setup:
+
+1. Generate the signing key pair: `npx tauri signer generate -w ~/.tauri/skills-manage.key` (run it in `apps/desktop`). The public key is in `plugins.updater.pubkey` in `tauri.conf.json`.
+2. Store the private key as the `TAURI_SIGNING_PRIVATE_KEY` repository secret. If the key has a password, also store it as `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`. The current key has no password; it was generated with `--ci`. Signing does not prompt when `CI=true`, which GitHub Actions sets.
+3. Back up the private key. Without it, installed copies cannot verify a new version and must be reinstalled by hand.
+
+For each release:
+
+1. Set the same version in `apps/desktop/package.json` (`npm version <x.y.z> --no-git-tag-version`), `src-tauri/tauri.conf.json` and `src-tauri/Cargo.toml`. Merge that to `main`.
+2. Tag `main` with `v<x.y.z>` and push the tag. `.github/workflows/release.yml` checks that the tag matches the version, runs the tests, then publishes the release with these files:
+   - `setup.exe`
+   - `.msi`
+   - `.sig` signatures
+   - `latest.json`
+   - the portable ZIP
+
+The portable ZIP is not updated in place. Its update prompt installs the setup version instead.
 
 Rust checks:
 
