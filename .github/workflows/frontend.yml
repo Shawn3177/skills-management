@@ -1,0 +1,54 @@
+name: Frontend
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - apps/desktop/**
+      - "!apps/desktop/src-tauri/**"
+      - .github/workflows/frontend.yml
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  frontend:
+    name: Frontend checks
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Detect frontend project
+        id: detect
+        shell: bash
+        run: |
+          if [ -f apps/desktop/package.json ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Setup Node
+        if: steps.detect.outputs.present == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Install dependencies
+        if: steps.detect.outputs.present == 'true'
+        working-directory: apps/desktop
+        run: npm ci
+
+      - name: Build frontend
+        if: steps.detect.outputs.present == 'true'
+        working-directory: apps/desktop
+        run: npm run build --if-present
+
+      - name: Test frontend
+        if: steps.detect.outputs.present == 'true'
+        working-directory: apps/desktop
+        run: npm test -- --run
+
