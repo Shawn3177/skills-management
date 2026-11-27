@@ -75,16 +75,13 @@ The product is a desktop operations tool. Prefer:
 
 ## CI
 
-The initial CI verifies repository hygiene and skips frontend or Rust checks until the Tauri app exists.
+CI runs only on pull requests, as one workflow per area, each only when the pull request changes that area:
 
-After `apps/desktop` is created, CI should run:
+- CI (every pull request): repository hygiene.
+- Frontend (`apps/desktop/` outside `src-tauri/`): `npm ci`, build, and tests.
+- Rust (`apps/desktop/src-tauri/`): `cargo check` and `cargo test` on Windows and Linux.
 
-```text
-npm ci
-npm run build --if-present
-cargo check
-cargo test
-```
+Merging to `main` does not re-run them. Releases are built by `release.yml` when a `v*` tag is pushed.
 
 If the app later needs Tauri bundle checks, add a separate packaging workflow because desktop packaging has heavier OS-specific prerequisites.
 
